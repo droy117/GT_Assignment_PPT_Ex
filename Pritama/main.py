@@ -2,13 +2,13 @@ import pandas as pd
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import matplotlib.pyplot as plt
 import os
 import io
 
-# --- Constants and Theme Settings ---
 APP_TITLE = "Dynamic Excel to PowerPoint Automation"
 WINDOW_SIZE = "1000x750"
 CHART_TYPES = ["Ignore", "Bar Chart", "Pie Chart", "Include in Table", "Use as Slide Title"]
@@ -57,10 +57,7 @@ class App(ctk.CTk):
         self.status_label.grid(row=3, column=0, padx=20, pady=(0, 10), sticky="w")
 
     def load_excel_file(self):
-        self.excel_path = filedialog.askopenfilename(
-            title="Select an Excel File",
-            filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*"))
-        )
+        self.excel_path = filedialog.askopenfilename(title="Select an Excel File", filetypes=(("Excel files", "*.xlsx *.xls"), ("All files", "*.*")))
         if not self.excel_path:
             return
 
@@ -122,8 +119,11 @@ class App(ctk.CTk):
 
         img_width = Inches(10)
         img_height = Inches(5.5)
+        top_of_title = title_shape.top
+        height_of_title = title_shape.height
+        top = top_of_title + height_of_title + Pt(20)  # 20px below title
         left = (prs.slide_width - img_width) / 2
-        top = (prs.slide_height - img_height) / 2
+
         slide.shapes.add_picture(chart_image_stream, left, top, width=img_width, height=img_height)
 
     def add_table_slide(self, prs, title, df_table):
@@ -137,8 +137,8 @@ class App(ctk.CTk):
         p.alignment = 1
 
         rows, cols = df_table.shape[0] + 1, df_table.shape[1]
-        left, top = Inches(1), Inches(1.8)
-        width = prs.slide_width - Inches(2)
+        left, top = Inches(0.5), Inches(1.6)
+        width = prs.slide_width - Inches(1)
         height = Inches(0.5) * rows
         table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
         table = table_shape.table
@@ -177,32 +177,48 @@ class App(ctk.CTk):
             self.status_label.configure(text="Status: Generating presentation...", text_color="white")
             self.update_idletasks()
 
-            prs = Presentation()
+            prs = Presentation("Parcel.pptx")
             prs.slide_width = Inches(16)
             prs.slide_height = Inches(9)
 
-            # --- Enhanced Title Slide ---
-            title_slide = prs.slides.add_slide(prs.slide_layouts[6])
+            # --- Custom Title Slide ---
+            title_slide_layout = prs.slide_layouts[6]
+            title_slide = prs.slides.add_slide(title_slide_layout)
+
             slide_width = prs.slide_width
             slide_height = prs.slide_height
 
-            title_box = title_slide.shapes.add_textbox(Inches(1), Inches(2), slide_width - Inches(2), Inches(1.5))
+            # Header banner
+            shape = title_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, slide_width, Inches(1))
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor(0, 51, 102)
+            shape.line.fill.background()
+
+            # Title
+            title_box = title_slide.shapes.add_textbox(Inches(1), Inches(1.2), slide_width - Inches(2), Inches(2))
             title_frame = title_box.text_frame
             p1 = title_frame.paragraphs[0]
             p1.text = user_ppt_title
             p1.font.size = Pt(44)
-            p1.font.name = 'Calibri'
             p1.font.bold = True
+            p1.font.name = "Calibri"
             p1.alignment = 1
 
+            # Subtitle
             subtitle_box = title_slide.shapes.add_textbox(Inches(1), Inches(3.5), slide_width - Inches(2), Inches(1))
             subtitle_frame = subtitle_box.text_frame
             p2 = subtitle_frame.paragraphs[0]
-            p2.text = f"Analysis of {os.path.basename(self.excel_path)}"
+            p2.text = f"Auto-generated from: {os.path.basename(self.excel_path)}"
             p2.font.size = Pt(20)
             p2.font.name = 'Calibri Light'
-            p2.font.color.rgb = RGBColor(80, 80, 80)
+            p2.font.color.rgb = RGBColor(100, 100, 100)
             p2.alignment = 1
+
+            # Footer
+            footer_shape = title_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, slide_height - Inches(0.5), slide_width, Inches(0.5))
+            footer_shape.fill.solid()
+            footer_shape.fill.fore_color.rgb = RGBColor(0, 51, 102)
+            footer_shape.line.fill.background()
 
             for col, widgets in self.column_widgets.items():
                 choice = widgets[1].get()
