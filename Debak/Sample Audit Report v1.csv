@@ -1,0 +1,15 @@
+﻿PRIVILEGED & CONFIDENTIAL,,,,,,,,,,,,,
+Sample Domain Audit Report,,,,,,,,,,,,,
+,,,,,,,,,,,,,
+ID,Website Name / Domain Name,Privacy Policy,Cookie Banner Deployed,User Consent Choices Honored,OneTrust Integration,Name of Third Party Integration / Tool,GPC Configuration,Geolocation Rules,Region,Average Monthly Traffic Volume,Level of Traffic Volume,Compliance Score,Level of Gap Quantity
+1,testdomain.net,Yes,Yes,No,OneTrust Integration,OneTrust,Configured,Configured,Global,"4,77,782",High Volume,93.5 out of 115,Low Gap Quantity
+2,examplepage.org,Yes,Yes,No,OneTrust Integration,OneTrust,Not Configured,Configured,Global,173200,High Volume,91 out of 115,Low Gap Quantity
+3,dummywebsite.info,Yes,Yes,No,OneTrust Integration,OneTrust,Not Configured,Configured,Global,130123,High Volume,93 out of 115,Low Gap Quantity
+4,fakedata.biz,Yes,Yes,No,OneTrust Integration,OneTrust,Configured,Configured,USA,31500,Moderate Volume,90.5 out of 115,Low Gap Quantity
+5,mocksite.co,Yes,Yes,No,OneTrust Integration,OneTrust,Configured,Configured,Global,30741,Moderate Volume,88 out of 115,Low Gap Quantity
+6,sampleweb.io,Third party privacy policy,No,N/A,No Integration,N/A,Not Configured,Not Configured,India,1200,Low Volume,15 out of 115,High Gap Quantity
+7,placeholder.tech,Yes,Yes,No,Third-Party Integration,CCM19,Not Configured,Not Configured,EU,3300,Low Volume,67 out of 115,Moderate Gap Quantity
+8,trythis.online,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,USA,3900,Low Volume,15.5 out of 115,High Gap Quantity
+9,demoportal.store,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,USA,36800,Moderate Volume,15.5 out of 115,High Gap Quantity
+10,randompage.net,Yes,Yes,No,OneTrust Integration,OneTrust,Configured,Not Configured,USA,17700,Moderate Volume,88 out of 115,Low Gap Quantity
+11,trialsite.org,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,Global,6000,Low Volume,20 out of 115,High Gap Quantity
