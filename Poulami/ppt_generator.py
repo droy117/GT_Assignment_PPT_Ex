@@ -12,6 +12,8 @@ import subprocess
 from pptx.chart.data import CategoryChartData
 from pptx.util import Inches, Pt
 from pptx.enum.chart import XL_CHART_TYPE
+import tempfile
+import subprocess
 
 # --- Constants and Theme Settings ---
 APP_TITLE = "Dynamic Excel to PowerPoint Automation"
@@ -154,10 +156,87 @@ class App(ctk.CTk):
         x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
         slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, cx, cy, chart_data)
 
+    def add_privacy_policy_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "Privacy Policy Compliance"
 
-    
+        privacy_policy = data['Privacy Policy'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = privacy_policy.index
+        chart_data.add_series("Domains", privacy_policy.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, x, y, cx, cy, chart_data)
+
+    def add_user_consent_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "User Consent Choices"
+
+        user_consent = data['User Consent Choices'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = user_consent.index
+        chart_data.add_series("Domains", user_consent.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.PIE, x, y, cx, cy, chart_data)
+
+    def add_third_party_tool_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "Third Party Tools Integration"
+
+        third_party_tools = data['Integration Name'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = third_party_tools.index
+        chart_data.add_series("Domains", third_party_tools.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, cx, cy, chart_data)
+
+    def add_gpc_config_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "GPC Configuration Distribution"
+
+        gpc_config = data['GPC Configuration'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = gpc_config.index
+        chart_data.add_series("Domains", gpc_config.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.PIE, x, y, cx, cy, chart_data)
+
+    def add_geolocation_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "Geolocation Rules Analysis"
+
+        geolocation_rules = data['Geolocation Rules'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = geolocation_rules.index
+        chart_data.add_series("Domains", geolocation_rules.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, x, y, cx, cy, chart_data)
+
+    def add_cookie_banner_chart(self, prs, data):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        slide.shapes.title.text = "Cookie Banner Deployment"
+
+        cookie_banner = data['Cookie Banner'].value_counts()
+
+        chart_data = CategoryChartData()
+        chart_data.categories = cookie_banner.index
+        chart_data.add_series("Domains", cookie_banner.values)
+
+        x, y, cx, cy = Inches(1), Inches(1.5), Inches(8), Inches(4.5)
+        slide.shapes.add_chart(XL_CHART_TYPE.PIE, x, y, cx, cy, chart_data)
+
+        
     def generate_default_report(self):
-        """Generates a default report with charts and opens it."""
+        """Generates a default report and opens it."""
         if not self.excel_path:
             messagebox.showerror("Error", "Please select an Excel file first.")
             return
@@ -174,17 +253,17 @@ class App(ctk.CTk):
             data['Cookie Compliance %'] = pd.Series(range(80, 100))[:len(data)]
             data['Vulnerability Score'] = pd.Series(range(0, 10))[:len(data)]
 
-            # Create PowerPoint presentation
+            # Create a new PowerPoint presentation
             prs = Presentation()
-            prs.slide_width = Inches(16)
-            prs.slide_height = Inches(9)
 
-            # Add Title Slide
-            title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+            # --- Add Title Slide ---
+            title_slide_layout = prs.slide_layouts[0]
+            title_slide = prs.slides.add_slide(title_slide_layout)
             title_slide.shapes.title.text = "Default Website Assessment Report"
-            title_slide.placeholders[1].text = "Generated Using Default Template"
+            if len(title_slide.placeholders) > 1:  # Subtitle placeholder
+                title_slide.placeholders[1].text = "Generated Using Python Automation"
 
-            # Add Summary Slide
+            # --- Add Summary Slide ---
             summary_slide = prs.slides.add_slide(prs.slide_layouts[1])
             summary_slide.shapes.title.text = "Summary"
             summary_slide.placeholders[1].text = (
@@ -193,11 +272,17 @@ class App(ctk.CTk):
                 f"Average Vulnerability: {data['Vulnerability Score'].mean():.2f}"
             )
 
-            # Add Charts
+            # --- Add Charts ---
             self.add_cookie_compliance_chart(prs, data)
             self.add_vulnerability_score_chart(prs, data)
             self.add_traffic_level_chart(prs, data)
             self.add_region_wise_chart(prs, data)
+            self.add_privacy_policy_chart(prs, data)
+            self.add_user_consent_chart(prs, data)
+            self.add_third_party_tool_chart(prs, data)
+            self.add_gpc_config_chart(prs, data)
+            self.add_geolocation_chart(prs, data)
+            self.add_cookie_banner_chart(prs, data)
 
             # Save the presentation to a temporary file
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pptx")
