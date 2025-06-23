@@ -246,9 +246,22 @@ class App(ctk.CTk):
             p.font.color.rgb = RGBColor(128, 128, 128)
 
     def add_section_header_slide(self, prs, title):
-        slide_layout = prs.slide_layouts[2]
+        """Adds a section header slide and removes any unused placeholders."""
+        slide_layout = prs.slide_layouts[2] # Section Header layout
         slide = prs.slides.add_slide(slide_layout)
-        slide.shapes.title.text = title
+        
+        title_shape = slide.shapes.title
+        title_shape.text = title
+
+        # Remove all other placeholder shapes from the slide to prevent leftover text
+        placeholders_to_remove = []
+        for shape in slide.shapes:
+            if shape.is_placeholder and shape.shape_id != title_shape.shape_id:
+                placeholders_to_remove.append(shape)
+        
+        for shape in placeholders_to_remove:
+            sp_element = shape.element
+            sp_element.getparent().remove(sp_element)
 
     def add_bullet_point_slide(self, prs, title, bullet_points):
         slide_layout = prs.slide_layouts[1]
@@ -264,8 +277,8 @@ class App(ctk.CTk):
 
     def add_chart_slide(self, prs, title, chart_image_stream):
         """
-        Adds a slide with a chart, ensuring the chart is centered within the
-        content placeholder of the slide layout for proper alignment.
+        Adds a slide with a chart, ensuring the chart is centered and that
+        the underlying content placeholder is removed.
         """
         slide_layout = prs.slide_layouts[1] # Use 'Title and Content' layout
         slide = prs.slides.add_slide(slide_layout)
@@ -299,6 +312,10 @@ class App(ctk.CTk):
         top = placeholder.top + (ph_height - new_height) / 2
         
         slide.shapes.add_picture(chart_image_stream, left, top, width=new_width, height=new_height)
+        
+        # Remove the placeholder to prevent "Click to add..."
+        ph_element = placeholder.element
+        ph_element.getparent().remove(ph_element)
 
     def add_table_slide(self, prs, title, df_table):
         """
