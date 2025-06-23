@@ -6,11 +6,12 @@ from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import os
-from dotenv import load_dotenv
 import winreg
 import io
-import json
+import asyncio
+import requests
 
 def get_windows_theme():
     """
@@ -22,14 +23,12 @@ def get_windows_theme():
         key = winreg.OpenKey(registry, key_path)
         value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         return "Light" if value == 1 else "Dark"
-    except Exception as e:
-        print("Error reading Windows theme:", e)
+    except Exception:
         return "Light"  # Fallback default
 
 # --- Constants and Theme Settings ---
 APP_TITLE = "PPTEx"
 WINDOW_SIZE = "1200x800"
-# --- NEW: Added 'Use for AI Summary' option ---
 COLUMN_ACTIONS = [
     "Ignore",
     "Group Slides by this Column",
@@ -48,7 +47,7 @@ class App(ctk.CTk):
         # --- Window Setup ---
         self.title(APP_TITLE)
         self.geometry(WINDOW_SIZE)
-        ctk.set_appearance_mode(get_windows_theme())  # Set appearance mode based on Windows theme
+        ctk.set_appearance_mode(get_windows_theme())
         ctk.set_default_color_theme("blue")
 
         # --- Class Variables ---
@@ -66,7 +65,6 @@ class App(ctk.CTk):
         self.file_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
         self.file_frame.grid_columnconfigure(1, weight=1)
 
-        # --- MODIFIED: Changed label to be more generic ---
         self.browse_data_button = ctk.CTkButton(self.file_frame, text="Select Data File (Excel, CSV)", command=self.load_data_file)
         self.browse_data_button.grid(row=0, column=0, padx=10, pady=10)
         self.data_file_label = ctk.CTkLabel(self.file_frame, text="No data file selected", anchor="w")
@@ -102,7 +100,6 @@ class App(ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="Status: Ready. Please select a data file.", text_color="gray")
         self.status_label.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="w")
 
-    # --- MODIFIED: Handles Excel, CSV, and TSV ---
     def load_data_file(self):
         """Loads data from Excel, CSV, or TSV files."""
         self.data_file_path = filedialog.askopenfilename(
@@ -131,10 +128,10 @@ class App(ctk.CTk):
             elif file_ext == '.tsv':
                 self.dataframe = pd.read_csv(self.data_file_path, sep='\t', header=header_row)
             else:
-                raise ValueError("Unsupported file type. Please select an Excel or CSV file.")
+                raise ValueError("Unsupported file type.")
 
             self.dataframe.dropna(how='all', inplace=True)
-            self.dataframe = self.dataframe.loc[:, ~self.dataframe.columns.str.contains('^Unnamed')] # Remove unnamed columns
+            self.dataframe = self.dataframe.loc[:, ~self.dataframe.columns.str.contains('^Unnamed')]
             self.populate_column_mappings()
             self.generate_button.configure(state="normal")
             self.status_label.configure(text="Status: File loaded. Please map columns.", text_color="green")
@@ -150,17 +147,16 @@ class App(ctk.CTk):
             file_ext = os.path.splitext(file_path)[1].lower()
             if file_ext in ['.xlsx', '.xls']:
                 temp_df = pd.read_excel(file_path, header=None, nrows=10)
-            else: # for csv, tsv
+            else:
                 temp_df = pd.read_csv(file_path, header=None, nrows=10, sep=None, engine='python')
             
             for i, row in temp_df.iterrows():
-                # A good header has mostly non-numeric, unique string values
                 if row.notna().sum() > len(row) / 2 and all(isinstance(x, str) for x in row if pd.notna(x)):
                     if row.nunique() >= len(row) / 2:
                         return i
         except Exception:
-            return 0 # Fallback
-        return 0 # Default to the first row if no better header is found
+            return 0
+        return 0
 
     def load_template_file(self):
         self.template_path = filedialog.askopenfilename(filetypes=(("PowerPoint templates", "*.pptx"),))
@@ -170,7 +166,6 @@ class App(ctk.CTk):
             self.template_label.configure(text="No template selected. A default will be used.")
 
     def populate_column_mappings(self):
-        """Creates UI for column mappings with intelligent defaults."""
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.column_widgets.clear()
@@ -183,7 +178,6 @@ class App(ctk.CTk):
             unique_count = self.dataframe[col_name].nunique()
             dtype = self.dataframe[col_name].dtype
             
-            # --- Smarter Default Logic ---
             if "finding" in col_name.lower() or "summary" in col_name.lower():
                 default_action = "Use for AI Summary"
             elif "risk" in col_name.lower() or "level" in col_name.lower():
@@ -210,9 +204,7 @@ class App(ctk.CTk):
         if len(slide.placeholders) > 1:
             slide.placeholders[1].text = slide_subtitle
 
-    # --- NEW: Specific slide for AI summary ---
     def add_ai_summary_slide(self, prs, title, summary_text):
-        """Adds a nicely formatted slide for the AI-generated summary."""
         slide_layout = prs.slide_layouts[1] # Title and Content
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
@@ -222,29 +214,36 @@ class App(ctk.CTk):
         tf.clear()
         tf.word_wrap = True
 
-        # Split the text by lines to process titles and bullets
+        disclaimer_text = ""
+        if "(Note:" in summary_text:
+            parts = summary_text.split("\n\n(Note:")
+            summary_text = parts[0].strip()
+            disclaimer_text = "(Note:" + parts[1].strip()
+
         lines = summary_text.strip().split('\n')
         for line in lines:
             line = line.strip()
             if not line: continue
             
-            # Simple check for headers vs bullets
             if line.startswith(('* ', '- ')):
                 p = tf.add_paragraph()
-                p.text = line[2:] # Remove bullet character
-                p.level = 1
-                p.font.size = Pt(16)
+                p.text = line[2:]
+                p.level = 1; p.font.size = Pt(16)
             elif line.endswith(':'):
                 p = tf.add_paragraph()
                 p.text = line
-                p.level = 0
-                p.font.bold = True
-                p.font.size = Pt(18)
-            else: # A line that is likely part of a paragraph
+                p.level = 0; p.font.bold = True; p.font.size = Pt(18)
+            else:
                 p = tf.add_paragraph()
                 p.text = line
-                p.level = 1
-                p.font.size = Pt(16)
+                p.level = 0; p.font.size = Pt(16)
+        
+        if disclaimer_text:
+            tf.add_paragraph() 
+            p = tf.add_paragraph()
+            p.text = disclaimer_text
+            p.level = 0; p.font.italic = True; p.font.size = Pt(12)
+            p.font.color.rgb = RGBColor(128, 128, 128)
 
     def add_section_header_slide(self, prs, title):
         slide_layout = prs.slide_layouts[2]
@@ -255,8 +254,7 @@ class App(ctk.CTk):
         slide_layout = prs.slide_layouts[1]
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
-        body_shape = slide.shapes.placeholders[1]
-        tf = body_shape.text_frame
+        tf = slide.shapes.placeholders[1].text_frame
         tf.clear()
         tf.word_wrap = True
         for point in bullet_points:
@@ -265,43 +263,71 @@ class App(ctk.CTk):
             p.level = 0
 
     def add_chart_slide(self, prs, title, chart_image_stream):
-        slide_layout = prs.slide_layouts[5]
+        """
+        Adds a slide with a chart, ensuring the chart is centered within the
+        content placeholder of the slide layout for proper alignment.
+        """
+        slide_layout = prs.slide_layouts[1] # Use 'Title and Content' layout
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
+
+        if len(slide.placeholders) < 2:
+            slide.shapes.add_picture(chart_image_stream, Inches(2), Inches(2), width=Inches(6))
+            return
+
+        placeholder = slide.placeholders[1]
         
-        # Center the image on the slide
-        img_width = Inches(8)
-        img_height = Inches(5.5) # A common aspect ratio for presentations
-        left = (prs.slide_width - img_width) / 2
-        top = Inches(1.75)
+        chart_image_stream.seek(0)
+        try:
+            img = mpimg.imread(chart_image_stream, format='png')
+            img_height_px, img_width_px, _ = img.shape
+            image_aspect_ratio = float(img_width_px) / float(img_height_px)
+        finally:
+            chart_image_stream.seek(0)
+
+        ph_width, ph_height = placeholder.width, placeholder.height
+        placeholder_aspect_ratio = float(ph_width) / float(ph_height)
+
+        if image_aspect_ratio > placeholder_aspect_ratio:
+            new_width = ph_width
+            new_height = new_width / image_aspect_ratio
+        else:
+            new_height = ph_height
+            new_width = new_height * image_aspect_ratio
+
+        left = placeholder.left + (ph_width - new_width) / 2
+        top = placeholder.top + (ph_height - new_height) / 2
         
-        pic = slide.shapes.add_picture(chart_image_stream, left, top, width=img_width, height=img_height)
+        slide.shapes.add_picture(chart_image_stream, left, top, width=new_width, height=new_height)
 
     def add_table_slide(self, prs, title, df_table):
-        slide_layout = prs.slide_layouts[5]
+        """
+        Adds a slide with a table, placing it within the content
+        placeholder of the slide for proper alignment.
+        """
+        slide_layout = prs.slide_layouts[1] # Use 'Title and Content' layout
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
 
-        rows, cols = df_table.shape[0] + 1, df_table.shape[1]
-        # Make table wider to fit more content
-        left, top, width, height = Inches(0.5), Inches(2.0), Inches(pr.slide_width / Inches(1) - 1), Inches(0.8)
-        
-        table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
-        table = table_shape.table
+        if len(slide.placeholders) < 2:
+            rows, cols = df_table.shape[0] + 1, df_table.shape[1]
+            table_shape = slide.shapes.add_table(rows, cols, Inches(0.5), Inches(2.0), Inches(9.0), Inches(5.5))
+        else:
+            placeholder = slide.placeholders[1]
+            left, top, width, height = placeholder.left, placeholder.top, placeholder.width, placeholder.height
+            rows, cols = df_table.shape[0] + 1, df_table.shape[1]
+            table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+            placeholder.element.getparent().remove(placeholder.element)
 
-        # Header styling
+        table = table_shape.table
         for c, col_name in enumerate(df_table.columns):
             cell = table.cell(0, c)
             cell.text = str(col_name)
             p = cell.text_frame.paragraphs[0]
-            p.font.bold = True
-            p.font.size = Pt(12)
-            p.font.color.rgb = RGBColor(255, 255, 255)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = RGBColor(79, 129, 189)
+            p.font.bold = True; p.font.size = Pt(12); p.font.color.rgb = RGBColor(255, 255, 255)
+            cell.fill.solid(); cell.fill.fore_color.rgb = RGBColor(79, 129, 189)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
 
-        # Data rows styling
         for r_idx, row_data in enumerate(df_table.itertuples(index=False), start=1):
             for c_idx, cell_data in enumerate(row_data):
                 cell = table.cell(r_idx, c_idx)
@@ -309,19 +335,23 @@ class App(ctk.CTk):
                 cell.vertical_anchor = MSO_ANCHOR.MIDDLE
                 cell.text_frame.paragraphs[0].font.size = Pt(11)
                 if (r_idx % 2) == 0:
-                    cell.fill.solid()
-                    cell.fill.fore_color.rgb = RGBColor(220, 230, 241)
+                    cell.fill.solid(); cell.fill.fore_color.rgb = RGBColor(220, 230, 241)
 
-    # --- NEW: Gemini API Integration ---
     async def get_ai_summary(self, data_for_summary):
         """Sends data to Gemini API and returns a textual summary."""
-        self.status_label.configure(text="Status: Generating AI insights... This may take a moment.", text_color="cyan")
+        self.status_label.configure(text="Status: Generating AI insights...", text_color="cyan")
         self.update_idletasks()
         
-        # Convert the relevant dataframe part to a concise string format
-        data_string = data_for_summary.to_csv(index=False)
+        MAX_ROWS_FOR_AI = 200
+        disclaimer = ""
+        if len(data_for_summary) > MAX_ROWS_FOR_AI:
+            data_for_summary_sample = data_for_summary.sample(MAX_ROWS_FOR_AI, random_state=42)
+            disclaimer = f"\n\n(Note: This summary is based on a random sample of {MAX_ROWS_FOR_AI} out of {len(data_for_summary)} total rows.)"
+        else:
+            data_for_summary_sample = data_for_summary
 
-        # Craft a detailed prompt for high-quality results
+        data_string = data_for_summary_sample.to_csv(index=False)
+
         prompt = f"""
         As a professional data privacy and website security analyst, your task is to create an executive summary for a PowerPoint presentation.
         Based on the following audit data snippet:
@@ -346,32 +376,31 @@ class App(ctk.CTk):
         """
         
         try:
-            chatHistory = [{"role": "user", "parts": [{"text": prompt}]}]
-            payload = {"contents": chatHistory}
-            load_dotenv() 
-            apiKey = os.getenv("GOOGLE_API_KEY")
-            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
+            apiKey = os.environ.get("GOOGLE_API_KEY")
+            if not apiKey:
+                return "Error: GOOGLE_API_KEY environment variable not found. Please set it to use the AI summary feature."
+
+            payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={apiKey}"
             
-            # Using async fetch (hypothetically, since CustomTkinter is not async)
-            # In a real async app, you'd use a library like `aiohttp`.
-            # For this context, we will simulate a blocking call.
-            # This is a placeholder for the actual API call logic.
-            # In a real application, this should be run in a separate thread to avoid freezing the GUI.
-            import requests
-            response = requests.post(apiUrl, json=payload)
-            response.raise_for_status() # Raise an exception for bad status codes
+            response = await asyncio.to_thread(requests.post, apiUrl, json=payload, timeout=90)
+            response.raise_for_status()
             
             result = response.json()
             
             if result.get('candidates'):
-                return result['candidates'][0]['content']['parts'][0]['text']
+                summary_text = result['candidates'][0]['content']['parts'][0]['text']
+                return summary_text + disclaimer
             else:
-                # Handle cases where the response is not as expected or indicates an error
-                error_message = result.get('error', {}).get('message', 'No content returned from API.')
-                return f"Error: Could not generate AI summary. Details: {error_message}"
+                error_info = result.get('promptFeedback', 'No content returned from API.')
+                return f"Error: Could not generate AI summary. Details: {error_info}"
 
-        except Exception as e:
+        except requests.exceptions.Timeout:
+            return "An error occurred: The request to the AI service timed out."
+        except requests.exceptions.RequestException as e:
             return f"An error occurred while contacting the AI service: {e}"
+        except Exception as e:
+            return f"An unexpected error occurred during AI summary generation: {e}"
 
 
     def generate_plots_for_df(self, prs, df_subset, group_title=""):
@@ -387,11 +416,10 @@ class App(ctk.CTk):
 
             if action == "Create Bar Chart":
                 data_counts.plot(kind='bar', ax=ax, color=plt.cm.viridis.colors)
-                ax.set_ylabel("Count")
-                plt.xticks(rotation=45, ha='right')
+                ax.set_ylabel("Count"); plt.xticks(rotation=45, ha='right')
             elif action == "Create Pie Chart":
                 ax.pie(data_counts, labels=data_counts.index, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
-                ax.axis('equal') # Equal aspect ratio ensures that pie is drawn as a circle.
+                ax.axis('equal')
 
             ax.set_title(chart_title, fontsize=16, pad=20)
             plt.tight_layout()
@@ -408,20 +436,27 @@ class App(ctk.CTk):
             table_title = f"{group_title}: Data Summary" if group_title else "Detailed Data Summary"
             self.add_table_slide(prs, table_title, table_df)
 
-    # --- MODIFIED: Main generation logic with AI step ---
     async def generate_presentation_async(self):
         if self.dataframe is None:
             messagebox.showerror("Error", "No data has been loaded.")
             return
 
+        self.generate_button.configure(state="disabled")
         self.status_label.configure(text="Status: Generating presentation...", text_color="white")
         self.update_idletasks()
         
         try:
             prs = Presentation(self.template_path) if self.template_path else Presentation()
+            
+            if self.template_path:
+                # Remove all existing slides from the template file
+                for i in range(len(prs.slides) - 1, -1, -1):
+                    rId = prs.slides._sldIdLst[i].rId
+                    prs.part.drop_rel(rId)
+                    del prs.slides._sldIdLst[i]
+            
             if not self.template_path:
-                prs.slide_width = Inches(16)
-                prs.slide_height = Inches(9)
+                prs.slide_width = Inches(16); prs.slide_height = Inches(9)
 
             ppt_title = self.ppt_title_entry.get() or "Data Analysis Report"
             subtitle_text = f"Source: {os.path.basename(self.data_file_path)}"
@@ -429,7 +464,6 @@ class App(ctk.CTk):
             
             mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
             
-            # --- NEW: AI Summary Generation Step ---
             ai_summary_cols = [col for col, action in mappings.items() if action == "Use for AI Summary"]
             if ai_summary_cols:
                 summary_df = self.dataframe[ai_summary_cols]
@@ -478,20 +512,16 @@ class App(ctk.CTk):
             messagebox.showerror("Generation Error", f"An unexpected error occurred:\n\n{e}", detail=str(e))
             import traceback
             traceback.print_exc()
+        finally:
+            self.generate_button.configure(state="normal")
 
-    # --- Wrapper for async call from sync GUI ---
+
     def generate_presentation(self):
-        # This function is the button's command. It needs to be synchronous.
-        # It will run the async logic in a way the GUI can handle.
-        import asyncio
-        # This is a simplified way to run an async function from a sync context.
-        # For a more robust GUI application, you'd typically run the async event loop in a separate thread.
         try:
             asyncio.run(self.generate_presentation_async())
         except Exception as e:
              messagebox.showerror("Runtime Error", f"An error occurred while running the async operation:\n\n{e}")
 
-# --- Main Execution ---
 if __name__ == "__main__":
     app = App()
     app.mainloop()
