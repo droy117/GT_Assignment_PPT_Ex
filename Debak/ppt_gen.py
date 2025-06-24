@@ -12,6 +12,10 @@ import winreg
 import io
 import asyncio
 import requests
+import re # Imported for data cleaning
+from dotenv import load_dotenv
+load_dotenv()
+
 
 def get_windows_theme():
     """
@@ -26,16 +30,26 @@ def get_windows_theme():
     except Exception:
         return "Light"  # Fallback default
 
+# --- NEW: Helper function to truncate long labels ---
+def truncate_label(label, length=20):
+    """Truncates a label if it's longer than the specified length."""
+    label_str = str(label)  # Ensure the label is a string
+    if len(label_str) > length:
+        return label_str[:length] + '...'
+    return label_str
+
 # --- Constants and Theme Settings ---
 APP_TITLE = "PPTEx"
 WINDOW_SIZE = "1200x800"
+# UPDATED: Removed "Use for AI Summary" as it's now automatic for charts
 COLUMN_ACTIONS = [
     "Ignore",
     "Group Slides by this Column",
-    "Use for AI Summary",
     "Summarize as Bullet Points",
     "Create Bar Chart",
     "Create Pie Chart",
+    "Create Histogram",
+    "Create Line Chart",
     "Include in Data Table"
 ]
 
@@ -52,9 +66,11 @@ class App(ctk.CTk):
 
         # --- Class Variables ---
         self.dataframe = None
+        self.original_df = None
         self.data_file_path = ""
         self.template_path = ""
         self.column_widgets = {}
+        self.max_score_info = {}
 
         # --- Main Layout Configuration ---
         self.grid_columnconfigure(0, weight=1)
@@ -100,38 +116,49 @@ class App(ctk.CTk):
         self.status_label = ctk.CTkLabel(self, text="Status: Ready. Please select a data file.", text_color="gray")
         self.status_label.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="w")
 
+    def clean_data(self, df):
+        cleaned_df = df.copy()
+        self.max_score_info = {}
+
+        for col in cleaned_df.columns:
+            if cleaned_df[col].dtype == 'object' and cleaned_df[col].notna().any():
+                pattern = r'^\s*([0-9.]+)\s*(out of|/)\s*([0-9.]+)'
+                if cleaned_df[col].str.contains(pattern, regex=True, na=False).any():
+                    extracted_data = cleaned_df[col].str.extract(pattern)
+                    scores = pd.to_numeric(extracted_data[0], errors='coerce')
+                    max_vals = pd.to_numeric(extracted_data[2], errors='coerce')
+                    if scores.notna().any():
+                        new_col_name = f"{col} (Score)"
+                        cleaned_df[new_col_name] = scores
+                        first_valid_max = max_vals.dropna().iloc[0] if max_vals.notna().any() else None
+                        if first_valid_max:
+                            self.max_score_info[new_col_name] = first_valid_max
+                        cleaned_df.drop(columns=[col], inplace=True)
+        return cleaned_df
+
     def load_data_file(self):
-        """Loads data from Excel, CSV, or TSV files."""
         self.data_file_path = filedialog.askopenfilename(
-            filetypes=(
-                ("All Data Files", "*.xlsx *.xls *.csv *.tsv"),
-                ("Excel files", "*.xlsx *.xls"),
-                ("CSV files", "*.csv"),
-                ("TSV files", "*.tsv"),
-                ("All files", "*.*")
-            )
+            filetypes=(("All Data Files", "*.xlsx *.xls *.csv *.tsv"),("Excel files", "*.xlsx *.xls"),("CSV files", "*.csv"),("TSV files", "*.tsv"),("All files", "*.*"))
         )
         if not self.data_file_path: return
-
         self.data_file_label.configure(text=os.path.basename(self.data_file_path))
         self.status_label.configure(text="Status: Reading data file...", text_color="white")
         self.update_idletasks()
-
         try:
             file_ext = os.path.splitext(self.data_file_path)[1].lower()
             header_row = self._find_header_row(self.data_file_path)
-
             if file_ext in ['.xlsx', '.xls']:
-                self.dataframe = pd.read_excel(self.data_file_path, header=header_row)
+                df = pd.read_excel(self.data_file_path, header=header_row)
             elif file_ext == '.csv':
-                self.dataframe = pd.read_csv(self.data_file_path, header=header_row)
+                df = pd.read_csv(self.data_file_path, header=header_row)
             elif file_ext == '.tsv':
-                self.dataframe = pd.read_csv(self.data_file_path, sep='\t', header=header_row)
+                df = pd.read_csv(self.data_file_path, sep='\t', header=header_row)
             else:
                 raise ValueError("Unsupported file type.")
-
-            self.dataframe.dropna(how='all', inplace=True)
-            self.dataframe = self.dataframe.loc[:, ~self.dataframe.columns.str.contains('^Unnamed')]
+            df.dropna(how='all', inplace=True)
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+            self.original_df = df.copy()
+            self.dataframe = self.clean_data(df)
             self.populate_column_mappings()
             self.generate_button.configure(state="normal")
             self.status_label.configure(text="Status: File loaded. Please map columns.", text_color="green")
@@ -142,14 +169,12 @@ class App(ctk.CTk):
             self.generate_button.configure(state="disabled")
 
     def _find_header_row(self, file_path):
-        """Intelligently finds the header row in a data file."""
         try:
             file_ext = os.path.splitext(file_path)[1].lower()
             if file_ext in ['.xlsx', '.xls']:
                 temp_df = pd.read_excel(file_path, header=None, nrows=10)
             else:
                 temp_df = pd.read_csv(file_path, header=None, nrows=10, sep=None, engine='python')
-            
             for i, row in temp_df.iterrows():
                 if row.notna().sum() > len(row) / 2 and all(isinstance(x, str) for x in row if pd.notna(x)):
                     if row.nunique() >= len(row) / 2:
@@ -170,27 +195,24 @@ class App(ctk.CTk):
             widget.destroy()
         self.column_widgets.clear()
         if self.dataframe is None: return
-
         for i, col_name in enumerate(self.dataframe.columns):
             label = ctk.CTkLabel(self.scrollable_frame, text=col_name, wraplength=250)
             label.grid(row=i, column=0, padx=10, pady=(5, 10), sticky="w")
-
             unique_count = self.dataframe[col_name].nunique()
             dtype = self.dataframe[col_name].dtype
-            
-            if "finding" in col_name.lower() or "summary" in col_name.lower():
-                default_action = "Use for AI Summary"
-            elif "risk" in col_name.lower() or "level" in col_name.lower():
-                 default_action = "Create Pie Chart"
-            elif "score" in col_name.lower() or dtype in ['int64', 'float64']:
+            col_lower = col_name.lower()
+            if col_name in self.max_score_info:
                 default_action = "Create Bar Chart"
-            elif 0 < unique_count < 6:
+            elif "risk" in col_lower or "level" in col_lower:
+                 default_action = "Create Pie Chart"
+            elif dtype in ['int64', 'float64']:
+                default_action = "Create Histogram"
+            elif 0 < unique_count < 6 and dtype == 'object':
                 default_action = "Create Pie Chart"
             elif dtype == 'object' and unique_count > len(self.dataframe) * 0.8:
                  default_action = "Summarize as Bullet Points"
             else:
                 default_action = "Ignore"
-
             dropdown_var = ctk.StringVar(value=default_action)
             dropdown = ctk.CTkOptionMenu(self.scrollable_frame, values=COLUMN_ACTIONS, variable=dropdown_var, width=250)
             dropdown.grid(row=i, column=1, padx=10, pady=(5, 10), sticky="e")
@@ -204,61 +226,58 @@ class App(ctk.CTk):
         if len(slide.placeholders) > 1:
             slide.placeholders[1].text = slide_subtitle
 
-    def add_ai_summary_slide(self, prs, title, summary_text):
-        slide_layout = prs.slide_layouts[1] # Title and Content
+    def add_chart_and_insight_slide(self, prs, title, chart_image_stream, insight_text):
+        """
+        NEW: Adds a slide with a chart on the left and AI insights on the right.
+        """
+        # Layout 3 is 'Two Content' in most standard templates.
+        slide_layout = prs.slide_layouts[3] 
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
+
+        # --- Add Chart to Left Placeholder ---
+        placeholder_left = slide.placeholders[1]
         
-        body_shape = slide.shapes.placeholders[1]
-        tf = body_shape.text_frame
+        # Remove the placeholder text box before adding image
+        ph_element = placeholder_left.element
+        ph_element.getparent().remove(ph_element)
+        
+        # Center the image within the placeholder's original boundaries
+        chart_image_stream.seek(0)
+        slide.shapes.add_picture(chart_image_stream, placeholder_left.left, placeholder_left.top, width=placeholder_left.width)
+        
+        # --- Add AI Insight to Right Placeholder ---
+        placeholder_right = slide.placeholders[2]
+        tf = placeholder_right.text_frame
         tf.clear()
         tf.word_wrap = True
-
-        disclaimer_text = ""
-        if "(Note:" in summary_text:
-            parts = summary_text.split("\n\n(Note:")
-            summary_text = parts[0].strip()
-            disclaimer_text = "(Note:" + parts[1].strip()
-
-        lines = summary_text.strip().split('\n')
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        
+        lines = insight_text.strip().replace('**', '').split('\n')
         for line in lines:
             line = line.strip()
             if not line: continue
             
-            if line.startswith(('* ', '- ')):
-                p = tf.add_paragraph()
-                p.text = line[2:]
-                p.level = 1; p.font.size = Pt(16)
-            elif line.endswith(':'):
+            if line.endswith(':'):
                 p = tf.add_paragraph()
                 p.text = line
                 p.level = 0; p.font.bold = True; p.font.size = Pt(18)
+            elif line.startswith(('* ', '- ')):
+                p = tf.add_paragraph()
+                p.text = line[2:]
+                p.level = 1; p.font.size = Pt(14)
             else:
                 p = tf.add_paragraph()
                 p.text = line
-                p.level = 0; p.font.size = Pt(16)
-        
-        if disclaimer_text:
-            tf.add_paragraph() 
-            p = tf.add_paragraph()
-            p.text = disclaimer_text
-            p.level = 0; p.font.italic = True; p.font.size = Pt(12)
-            p.font.color.rgb = RGBColor(128, 128, 128)
+                p.level = 0; p.font.size = Pt(14)
+
 
     def add_section_header_slide(self, prs, title):
-        """Adds a section header slide and removes any unused placeholders."""
-        slide_layout = prs.slide_layouts[2] # Section Header layout
+        slide_layout = prs.slide_layouts[2]
         slide = prs.slides.add_slide(slide_layout)
-        
         title_shape = slide.shapes.title
         title_shape.text = title
-
-        # Remove all other placeholder shapes from the slide to prevent leftover text
-        placeholders_to_remove = []
-        for shape in slide.shapes:
-            if shape.is_placeholder and shape.shape_id != title_shape.shape_id:
-                placeholders_to_remove.append(shape)
-        
+        placeholders_to_remove = [shp for shp in slide.shapes if shp.is_placeholder and shp.shape_id != title_shape.shape_id]
         for shape in placeholders_to_remove:
             sp_element = shape.element
             sp_element.getparent().remove(sp_element)
@@ -275,67 +294,17 @@ class App(ctk.CTk):
             p.text = str(point)
             p.level = 0
 
-    def add_chart_slide(self, prs, title, chart_image_stream):
-        """
-        Adds a slide with a chart, ensuring the chart is centered and that
-        the underlying content placeholder is removed.
-        """
-        slide_layout = prs.slide_layouts[1] # Use 'Title and Content' layout
-        slide = prs.slides.add_slide(slide_layout)
-        slide.shapes.title.text = title
-
-        if len(slide.placeholders) < 2:
-            slide.shapes.add_picture(chart_image_stream, Inches(2), Inches(2), width=Inches(6))
-            return
-
-        placeholder = slide.placeholders[1]
-        
-        chart_image_stream.seek(0)
-        try:
-            img = mpimg.imread(chart_image_stream, format='png')
-            img_height_px, img_width_px, _ = img.shape
-            image_aspect_ratio = float(img_width_px) / float(img_height_px)
-        finally:
-            chart_image_stream.seek(0)
-
-        ph_width, ph_height = placeholder.width, placeholder.height
-        placeholder_aspect_ratio = float(ph_width) / float(ph_height)
-
-        if image_aspect_ratio > placeholder_aspect_ratio:
-            new_width = ph_width
-            new_height = new_width / image_aspect_ratio
-        else:
-            new_height = ph_height
-            new_width = new_height * image_aspect_ratio
-
-        left = placeholder.left + (ph_width - new_width) / 2
-        top = placeholder.top + (ph_height - new_height) / 2
-        
-        slide.shapes.add_picture(chart_image_stream, left, top, width=new_width, height=new_height)
-        
-        # Remove the placeholder to prevent "Click to add..."
-        ph_element = placeholder.element
-        ph_element.getparent().remove(ph_element)
-
     def add_table_slide(self, prs, title, df_table):
-        """
-        Adds a slide with a table, placing it within the content
-        placeholder of the slide for proper alignment.
-        """
-        slide_layout = prs.slide_layouts[1] # Use 'Title and Content' layout
+        slide_layout = prs.slide_layouts[1]
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
-
+        rows, cols = df_table.shape[0] + 1, df_table.shape[1]
         if len(slide.placeholders) < 2:
-            rows, cols = df_table.shape[0] + 1, df_table.shape[1]
             table_shape = slide.shapes.add_table(rows, cols, Inches(0.5), Inches(2.0), Inches(9.0), Inches(5.5))
         else:
             placeholder = slide.placeholders[1]
-            left, top, width, height = placeholder.left, placeholder.top, placeholder.width, placeholder.height
-            rows, cols = df_table.shape[0] + 1, df_table.shape[1]
-            table_shape = slide.shapes.add_table(rows, cols, left, top, width, height)
+            table_shape = slide.shapes.add_table(rows, cols, placeholder.left, placeholder.top, placeholder.width, placeholder.height)
             placeholder.element.getparent().remove(placeholder.element)
-
         table = table_shape.table
         for c, col_name in enumerate(df_table.columns):
             cell = table.cell(0, c)
@@ -344,7 +313,6 @@ class App(ctk.CTk):
             p.font.bold = True; p.font.size = Pt(12); p.font.color.rgb = RGBColor(255, 255, 255)
             cell.fill.solid(); cell.fill.fore_color.rgb = RGBColor(79, 129, 189)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
-
         for r_idx, row_data in enumerate(df_table.itertuples(index=False), start=1):
             for c_idx, cell_data in enumerate(row_data):
                 cell = table.cell(r_idx, c_idx)
@@ -354,99 +322,120 @@ class App(ctk.CTk):
                 if (r_idx % 2) == 0:
                     cell.fill.solid(); cell.fill.fore_color.rgb = RGBColor(220, 230, 241)
 
-    async def get_ai_summary(self, data_for_summary):
-        """Sends data to Gemini API and returns a textual summary."""
-        self.status_label.configure(text="Status: Generating AI insights...", text_color="cyan")
+    async def get_ai_insight_for_chart(self, column_data: pd.Series, column_name: str):
+        """
+        NEW: Generates targeted AI insights for a single data column.
+        """
+        self.status_label.configure(text=f"Status: Generating AI insight for {column_name}...", text_color="cyan")
         self.update_idletasks()
         
-        MAX_ROWS_FOR_AI = 200
-        disclaimer = ""
-        if len(data_for_summary) > MAX_ROWS_FOR_AI:
-            data_for_summary_sample = data_for_summary.sample(MAX_ROWS_FOR_AI, random_state=42)
-            disclaimer = f"\n\n(Note: This summary is based on a random sample of {MAX_ROWS_FOR_AI} out of {len(data_for_summary)} total rows.)"
+        data_string = ""
+        # Create a summary of the data to send to the AI
+        if pd.api.types.is_numeric_dtype(column_data):
+            data_string = column_data.describe().to_string()
         else:
-            data_for_summary_sample = data_for_summary
-
-        data_string = data_for_summary_sample.to_csv(index=False)
+            data_string = column_data.value_counts().to_string()
 
         prompt = f"""
-        As a professional data privacy and website security analyst, your task is to create an executive summary for a PowerPoint presentation.
-        Based on the following audit data snippet:
+        As a data analyst, analyze the following data summary for a column named '{column_name}'.
+        The data represents a chart that your user will see.
 
-        --- DATA ---
+        --- DATA SUMMARY ---
         {data_string}
         --- END DATA ---
 
-        Please generate a summary that includes the following sections. Use bullet points for clarity.
+        Based on this data, provide a concise analysis for a PowerPoint slide. Structure your response into two sections using markdown-style headers:
 
-        Executive Summary:
-        - Provide a brief, high-level overview of the audit's main conclusions.
+        **Summary Insight:**
+        - Write a 1-2 sentence interpretation of what this data reveals. What is the main takeaway? (e.g., "The compliance scores are mostly high, but there is a notable cluster of low-scoring domains requiring attention.")
 
-        Key Insights & Risk Areas:
-        - Identify the most critical risks or recurring findings from the data.
-        - Point out any significant trends (e.g., a specific type of vulnerability is common).
+        **Key Metrics:**
+        - List 2-4 key, quantifiable metrics derived from the data.
+        - For numerical data, include: Average, Max, Min, and number of entries (count).
+        - For categorical data, include: The most frequent category and its count, and the least frequent category and its count.
+        - Format metrics clearly, like: "- Average Score: 85.5"
 
-        Key Metrics:
-        - Calculate and list important quantifiable metrics. For example: 'Total domains scanned: [count]', 'Domains with "High" risk: [count] ([percentage]%)', 'Average security score: [average]'.
-        
-        Your entire response should be formatted as plain text, ready to be copied into a presentation slide.
+        Your entire response must be plain text, ready for a slide.
         """
-        
         try:
-            apiKey = os.environ.get("GOOGLE_API_KEY")
-            if not apiKey:
-                return "Error: GOOGLE_API_KEY environment variable not found. Please set it to use the AI summary feature."
-
+            apiKey = os.getenv("GEMINI_API_KEY")
+            if not apiKey: return "Error: GEMINI_API_KEY environment variable not found."
             payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={apiKey}"
-            
+            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}"
             response = await asyncio.to_thread(requests.post, apiUrl, json=payload, timeout=90)
             response.raise_for_status()
-            
             result = response.json()
-            
             if result.get('candidates'):
                 summary_text = result['candidates'][0]['content']['parts'][0]['text']
-                return summary_text + disclaimer
+                print(f"--- AI INSIGHT FOR {column_name} ---")
+                print(summary_text)
+                print("------------------------------")
+                return summary_text
             else:
-                error_info = result.get('promptFeedback', 'No content returned from API.')
-                return f"Error: Could not generate AI summary. Details: {error_info}"
-
-        except requests.exceptions.Timeout:
-            return "An error occurred: The request to the AI service timed out."
-        except requests.exceptions.RequestException as e:
-            return f"An error occurred while contacting the AI service: {e}"
+                return f"Error: Could not generate AI summary. Details: {result.get('promptFeedback', 'No content.')}"
         except Exception as e:
-            return f"An unexpected error occurred during AI summary generation: {e}"
+            return f"An unexpected error occurred during AI insight generation: {e}"
 
-
-    def generate_plots_for_df(self, prs, df_subset, group_title=""):
+    async def generate_plots_for_df(self, prs, df_subset, group_title=""):
+        """
+        UPDATED: Now an async function that creates a chart and calls the AI for insights for each plot.
+        Also truncates long labels on bar and pie charts.
+        """
         mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
+        chart_actions = ["Create Bar Chart", "Create Pie Chart", "Create Histogram", "Create Line Chart"]
+        
         for col, action in mappings.items():
-            if action not in ["Create Bar Chart", "Create Pie Chart"]: continue
+            if action not in chart_actions: continue
             if df_subset[col].nunique() == 0 or df_subset[col].isnull().all(): continue
 
             plt.style.use('seaborn-v0_8-talk')
             fig, ax = plt.subplots(figsize=(10, 6))
-            data_counts = df_subset[col].value_counts()
-            chart_title = f"{group_title}: {col}" if group_title else f"Distribution of {col}"
+            chart_title = f"{group_title}: {col}" if group_title else f"Analysis of {col}"
 
+            # --- Generate Chart Image ---
             if action == "Create Bar Chart":
-                data_counts.plot(kind='bar', ax=ax, color=plt.cm.viridis.colors)
-                ax.set_ylabel("Count"); plt.xticks(rotation=45, ha='right')
+                if col in self.max_score_info:
+                    max_y_val = self.max_score_info[col]
+                    df_subset[col].plot(kind='bar', ax=ax, color=plt.cm.viridis(df_subset[col].values / max_y_val))
+                    ax.set_ylabel("Score"); ax.set_xlabel("Data Point Index")
+                    ax.set_ylim(0, max_y_val * 1.05)
+                    chart_title = f"{group_title}: {col.replace(' (Score)', '')}"
+                else:
+                    data_counts = df_subset[col].value_counts()
+                    # UPDATED: Truncate labels before plotting
+                    data_counts.index = data_counts.index.map(truncate_label)
+                    data_counts.plot(kind='bar', ax=ax, color=plt.cm.viridis.colors)
+                    ax.set_ylabel("Count")
+                plt.xticks(rotation=45, ha='right')
             elif action == "Create Pie Chart":
-                ax.pie(data_counts, labels=data_counts.index, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
+                data_counts = df_subset[col].value_counts()
+                # UPDATED: Truncate labels before plotting
+                truncated_labels = data_counts.index.map(truncate_label)
+                ax.pie(data_counts, labels=truncated_labels, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
                 ax.axis('equal')
-
+            elif action == "Create Histogram":
+                if pd.api.types.is_numeric_dtype(df_subset[col]):
+                    df_subset[col].plot(kind='hist', ax=ax, bins=15, color='skyblue', ec='black')
+                    ax.set_ylabel("Frequency"); ax.set_xlabel(col)
+                else: plt.close(fig); continue
+            elif action == "Create Line Chart":
+                 if pd.api.types.is_numeric_dtype(df_subset[col]):
+                    ax.plot(df_subset.index, df_subset[col], marker='o', linestyle='-')
+                    ax.set_ylabel(col); ax.set_xlabel("Index")
+                 else: plt.close(fig); continue
+            
             ax.set_title(chart_title, fontsize=16, pad=20)
             plt.tight_layout()
-
             img_stream = io.BytesIO()
             plt.savefig(img_stream, format='png', dpi=200, bbox_inches='tight')
             plt.close(fig)
             img_stream.seek(0)
-            self.add_chart_slide(prs, chart_title, img_stream)
+            
+            # --- Get AI Insight and Create Slide ---
+            insight_text = await self.get_ai_insight_for_chart(df_subset[col], col)
+            self.add_chart_and_insight_slide(prs, chart_title, img_stream, insight_text)
 
+        # --- Handle Table Generation (No AI insight for tables) ---
         table_cols = [col for col, action in mappings.items() if action == "Include in Data Table"]
         if table_cols:
             table_df = df_subset[table_cols]
@@ -464,16 +453,12 @@ class App(ctk.CTk):
         
         try:
             prs = Presentation(self.template_path) if self.template_path else Presentation()
-            
             if self.template_path:
-                # Remove all existing slides from the template file
                 for i in range(len(prs.slides) - 1, -1, -1):
                     rId = prs.slides._sldIdLst[i].rId
                     prs.part.drop_rel(rId)
                     del prs.slides._sldIdLst[i]
-            
-            if not self.template_path:
-                prs.slide_width = Inches(16); prs.slide_height = Inches(9)
+            if not self.template_path: prs.slide_width = Inches(16); prs.slide_height = Inches(9)
 
             ppt_title = self.ppt_title_entry.get() or "Data Analysis Report"
             subtitle_text = f"Source: {os.path.basename(self.data_file_path)}"
@@ -481,14 +466,7 @@ class App(ctk.CTk):
             
             mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
             
-            ai_summary_cols = [col for col, action in mappings.items() if action == "Use for AI Summary"]
-            if ai_summary_cols:
-                summary_df = self.dataframe[ai_summary_cols]
-                ai_summary_text = await self.get_ai_summary(summary_df)
-                self.add_ai_summary_slide(prs, "AI-Powered Executive Summary", ai_summary_text)
-                self.status_label.configure(text="Status: AI summary generated. Creating charts...", text_color="white")
-                self.update_idletasks()
-
+            # --- Generate Bullet Point Summary (if any) ---
             summary_cols = [col for col, action in mappings.items() if action == "Summarize as Bullet Points"]
             if summary_cols:
                 all_bullets = []
@@ -498,15 +476,16 @@ class App(ctk.CTk):
                 if all_bullets:
                     self.add_bullet_point_slide(prs, "Key Findings & Observations", all_bullets)
 
+            # --- Generate Charts and Grouped Analysis ---
             grouping_col = next((col for col, action in mappings.items() if action == "Group Slides by this Column"), None)
             if grouping_col:
                 unique_groups = self.dataframe[grouping_col].dropna().unique()
                 for group in unique_groups:
                     self.add_section_header_slide(prs, f"Detailed Analysis for: {group}")
                     df_subset = self.dataframe[self.dataframe[grouping_col] == group]
-                    self.generate_plots_for_df(prs, df_subset, group_title=str(group))
+                    await self.generate_plots_for_df(prs, df_subset, group_title=str(group))
             else:
-                self.generate_plots_for_df(prs, self.dataframe)
+                await self.generate_plots_for_df(prs, self.dataframe)
 
             self.add_section_header_slide(prs, "Thank You")
 
@@ -531,7 +510,6 @@ class App(ctk.CTk):
             traceback.print_exc()
         finally:
             self.generate_button.configure(state="normal")
-
 
     def generate_presentation(self):
         try:

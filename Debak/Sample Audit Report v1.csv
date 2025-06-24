@@ -13,3 +13,11 @@ ID,Website Name / Domain Name,Privacy Policy,Cookie Banner Deployed,User Consent
 9,demoportal.store,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,USA,36800,Moderate Volume,15.5 out of 115,High Gap Quantity
 10,randompage.net,Yes,Yes,No,OneTrust Integration,OneTrust,Configured,Not Configured,USA,17700,Moderate Volume,88 out of 115,Low Gap Quantity
 11,trialsite.org,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,Global,6000,Low Volume,20 out of 115,High Gap Quantity
+12,fictionalweb.info,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,Switzerland ,10600,Moderate Volume,20.7 out of 115,High Gap Quantity
+13,testingdomain.biz,Yes,Yes,No,OneTrust Integration,OneTrust,Not Configured,Not Configured,EU,40700,Moderate Volume,93 out of 115,Low Gap Quantity
+14,mimicpage.co,Yes,Yes,No,Third-Party Integration,Wix (Websites built using Wix often use pre-configured tools for cookie consent and privacy compliance.),Not Configured,Not Configured,EU,1280,Low Volume,47.5 out of 115,Moderate Gap Quantity
+15,simulated.io,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,USA,10300,Moderate Volume,17 out of 115,High Gap Quantity
+16,sandbox.tech,Yes,Yes,Yes,OneTrust Integration,OneTrust,Not Configured,Configured,Global,389845,High Volume,89 out of 115,Low Gap Quantity
+17,staging.online,Yes,Yes,No,OneTrust Integration,OneTrust,Not Configured,Configured,USA,38000,Moderate Volume,90.5 out of 115,Low Gap Quantity
+18,preview.store,Yes,No,N/A,No Integration,N/A,Not Configured,Not Configured,USA,45400,Moderate Volume,44.5 out of 115,Moderate Gap Quantity
+19,tempwebsite.com,Yes,Yes,No,OneTrust Integration,OneTrust,Not Configured,Configured,USA,75800,High Volume,86.5 out of 115,Low Gap Quantity
