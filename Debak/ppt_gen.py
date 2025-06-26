@@ -113,23 +113,56 @@ class App(ctk.CTk):
         self.status_label.grid(row=4, column=0, padx=20, pady=(0, 10), sticky="w")
 
     def clean_data(self, df):
+        """
+        UPDATED: Cleans specific columns to make them chart-friendly.
+        - Handles 'X out of Y' format (e.g., "8 out of 10").
+        - Handles comma-separated numbers (e.g., "1,234").
+        - Handles non-numeric text in numeric columns (e.g., "N/A...").
+        """
         cleaned_df = df.copy()
         self.max_score_info = {}
 
         for col in cleaned_df.columns:
-            if cleaned_df[col].dtype == 'object' and cleaned_df[col].notna().any():
+            # Skip if column is already purely numeric
+            if pd.api.types.is_numeric_dtype(cleaned_df[col].dtype):
+                continue
+
+            # Ensure column is treated as a string for cleaning operations
+            if cleaned_df[col].notna().any():
+                col_as_str = cleaned_df[col].astype(str)
+
+                # --- 1. Handle 'X out of Y' format (e.g., Compliance Score) ---
                 pattern = r'^\s*([0-9.]+)\s*(out of|/)\s*([0-9.]+)'
-                if cleaned_df[col].str.contains(pattern, regex=True, na=False).any():
-                    extracted_data = cleaned_df[col].str.extract(pattern)
+                if col_as_str.str.contains(pattern, regex=True, na=False).any():
+                    extracted_data = col_as_str.str.extract(pattern)
                     scores = pd.to_numeric(extracted_data[0], errors='coerce')
                     max_vals = pd.to_numeric(extracted_data[2], errors='coerce')
+                    
                     if scores.notna().any():
                         new_col_name = f"{col} (Score)"
                         cleaned_df[new_col_name] = scores
                         first_valid_max = max_vals.dropna().iloc[0] if max_vals.notna().any() else None
                         if first_valid_max:
                             self.max_score_info[new_col_name] = first_valid_max
+                        # Drop the original 'X out of Y' column
                         cleaned_df.drop(columns=[col], inplace=True)
+                        # Go to the next column
+                        continue
+                
+                # --- 2. Handle commas and non-numeric text (e.g., Avg Traffic) ---
+                # This logic attempts to convert any remaining object column to numeric
+                # It replaces commas and forces non-numeric values to NaN (Not a Number)
+                # which is ignored by plotting functions.
+                if pd.api.types.is_object_dtype(cleaned_df[col].dtype):
+                    # Remove commas and attempt conversion to a number
+                    cleaned_series = pd.to_numeric(
+                        col_as_str.str.replace(',', '', regex=False),
+                        errors='coerce' # This is key: invalid text becomes NaN
+                    )
+                    # Only replace the column if the conversion was successful for at least one value
+                    if cleaned_series.notna().any():
+                        cleaned_df[col] = cleaned_series
+
         return cleaned_df
 
     def load_data_file(self):
@@ -154,6 +187,7 @@ class App(ctk.CTk):
             df.dropna(how='all', inplace=True)
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             self.original_df = df.copy()
+            # The magic happens here!
             self.dataframe = self.clean_data(df)
             self.populate_column_mappings()
             self.generate_button.configure(state="normal")
@@ -411,14 +445,21 @@ class App(ctk.CTk):
                 ax.axis('equal')
             elif action == "Create Histogram":
                 if pd.api.types.is_numeric_dtype(df_subset[col]):
-                    df_subset[col].plot(kind='hist', ax=ax, bins=15, color='skyblue', ec='black')
+                    # Drop NaN values before plotting histogram
+                    df_subset[col].dropna().plot(kind='hist', ax=ax, bins=15, color='skyblue', ec='black')
                     ax.set_ylabel("Frequency"); ax.set_xlabel(col)
-                else: plt.close(fig); continue
+                else: 
+                    plt.close(fig)
+                    print(f"Skipping histogram for non-numeric column: {col}")
+                    continue
             elif action == "Create Line Chart":
                  if pd.api.types.is_numeric_dtype(df_subset[col]):
                     ax.plot(df_subset.index, df_subset[col], marker='o', linestyle='-')
                     ax.set_ylabel(col); ax.set_xlabel("Index")
-                 else: plt.close(fig); continue
+                 else: 
+                    plt.close(fig)
+                    print(f"Skipping line chart for non-numeric column: {col}")
+                    continue
             
             # ax.set_title(chart_title, fontsize=16, pad=20)
             plt.tight_layout()
