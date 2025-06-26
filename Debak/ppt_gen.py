@@ -12,23 +12,11 @@ import winreg
 import io
 import asyncio
 import requests
+import platform
 import re # Imported for data cleaning
 from dotenv import load_dotenv
 load_dotenv()
 
-
-def get_windows_theme():
-    """
-    Returns 'Light' or 'Dark' depending on the current Windows app theme.
-    """
-    try:
-        registry = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-        key = winreg.OpenKey(registry, key_path)
-        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-        return "Light" if value == 1 else "Dark"
-    except Exception:
-        return "Light"  # Fallback default
 
 # --- NEW: Helper function to truncate long labels ---
 def truncate_label(label, length=20):
@@ -61,7 +49,7 @@ class App(ctk.CTk):
         # --- Window Setup ---
         self.title(APP_TITLE)
         self.geometry(WINDOW_SIZE)
-        ctk.set_appearance_mode(get_windows_theme())
+        ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 
         # --- Class Variables ---
@@ -71,6 +59,14 @@ class App(ctk.CTk):
         self.template_path = ""
         self.column_widgets = {}
         self.max_score_info = {}
+        
+        # --- Set default template path if it exists ---
+        default_template_file = './Templates/Template.pptx'
+        if os.path.exists(default_template_file):
+            self.template_path = default_template_file
+            print(f"Default template found and set: {self.template_path}")
+        else:
+            print(f"Default template not found at {default_template_file}. Will use a blank presentation.")
 
         # --- Main Layout Configuration ---
         self.grid_columnconfigure(0, weight=1)
@@ -88,7 +84,7 @@ class App(ctk.CTk):
 
         self.browse_template_button = ctk.CTkButton(self.file_frame, text="Select PowerPoint Template (Optional)", command=self.load_template_file)
         self.browse_template_button.grid(row=1, column=0, padx=10, pady=10)
-        self.template_label = ctk.CTkLabel(self.file_frame, text="No template selected. A default will be used.", anchor="w")
+        self.template_label = ctk.CTkLabel(self.file_frame, text=f"Template: {os.path.basename(self.template_path)}" if self.template_path else "No template selected. A default will be used.", anchor="w")
         self.template_label.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
 
         # --- Middle Frame for Settings ---
@@ -361,7 +357,7 @@ class App(ctk.CTk):
             apiKey = os.getenv("GEMINI_API_KEY")
             if not apiKey: return "Error: GEMINI_API_KEY environment variable not found."
             payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}"
+            apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
             response = await asyncio.to_thread(requests.post, apiUrl, json=payload, timeout=90)
             response.raise_for_status()
             result = response.json()
@@ -424,7 +420,7 @@ class App(ctk.CTk):
                     ax.set_ylabel(col); ax.set_xlabel("Index")
                  else: plt.close(fig); continue
             
-            ax.set_title(chart_title, fontsize=16, pad=20)
+            # ax.set_title(chart_title, fontsize=16, pad=20)
             plt.tight_layout()
             img_stream = io.BytesIO()
             plt.savefig(img_stream, format='png', dpi=200, bbox_inches='tight')
