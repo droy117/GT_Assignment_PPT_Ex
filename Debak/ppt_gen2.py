@@ -6,20 +6,19 @@ from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import os
-import winreg
 import io
 import asyncio
 import requests
-import platform
-import re # Imported for data cleaning
-import json # Imported for parsing AI response
+import re
+import json
 from dotenv import load_dotenv
+import threading
+
 load_dotenv()
 
 
-# --- NEW: Helper function to truncate long labels ---
+# --- Helper function to truncate long labels ---
 def truncate_label(label, length=20):
     """Truncates a label if it's longer than the specified length."""
     label_str = str(label)  # Ensure the label is a string
@@ -61,7 +60,9 @@ class App(ctk.CTk):
         self.template_path = ""
         self.column_widgets = {}
         self.max_score_info = {}
-        
+        self.is_cancelling = False # For cancellable generation
+        self.generation_thread = None # To hold the generation thread
+
         # --- Set default template path if it exists ---
         default_template_file = './Templates/Template_1_default.pptx'
         if os.path.exists(default_template_file):
@@ -107,7 +108,7 @@ class App(ctk.CTk):
         self.bottom_frame.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="ew")
         self.bottom_frame.grid_columnconfigure(0, weight=1)
 
-        self.generate_button = ctk.CTkButton(self.bottom_frame, text="Generate Presentation", command=self.generate_presentation, state="disabled")
+        self.generate_button = ctk.CTkButton(self.bottom_frame, text="Generate Presentation", command=self.start_generation_thread, state="disabled")
         self.generate_button.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
         # --- Status Log Textbox ---
@@ -121,7 +122,7 @@ class App(ctk.CTk):
         self.status_log.tag_config("WARN", foreground="orange")
         self.status_log.tag_config("CYAN", foreground="cyan")
         self.status_log.tag_config("WHITE", foreground="white")
-        
+
         self.log_status("Ready. Please select a data file.", "INFO")
 
     def log_status(self, message, level="INFO"):
@@ -135,21 +136,30 @@ class App(ctk.CTk):
     def clean_data(self, df):
         """
         Cleans specific columns to make them chart-friendly.
+        REVISED to eliminate pandas UserWarning.
         """
         self.log_status("Cleaning data...", "INFO")
         cleaned_df = df.copy()
         self.max_score_info = {}
 
         for col in cleaned_df.columns:
+            # Skip if the column is already a numeric type
             if pd.api.types.is_numeric_dtype(cleaned_df[col].dtype):
                 continue
+
+            # Process non-numeric columns that contain some data
             if cleaned_df[col].notna().any():
                 col_as_str = cleaned_df[col].astype(str)
+
+                # --- FIX: Directly extract instead of using .contains() first ---
                 pattern = r'^\s*([0-9.]+)\s*(out of|/)\s*([0-9.]+)'
-                if col_as_str.str.contains(pattern, regex=True, na=False).any():
-                    extracted_data = col_as_str.str.extract(pattern)
+                extracted_data = col_as_str.str.extract(pattern)
+
+                # Check if any rows matched and yielded valid data in the first capture group
+                if not extracted_data[0].isnull().all():
                     scores = pd.to_numeric(extracted_data[0], errors='coerce')
                     max_vals = pd.to_numeric(extracted_data[2], errors='coerce')
+
                     if scores.notna().any():
                         new_col_name = f"{col} (Score)"
                         cleaned_df[new_col_name] = scores
@@ -158,14 +168,18 @@ class App(ctk.CTk):
                             self.max_score_info[new_col_name] = first_valid_max
                         cleaned_df.drop(columns=[col], inplace=True)
                         self.log_status(f"Cleaned and extracted scores from '{col}' into '{new_col_name}'.", "INFO")
-                        continue
+                        continue # Move to the next column
+
+                # Attempt to convert object columns with numbers-as-strings (e.g., "1,000")
                 if pd.api.types.is_object_dtype(cleaned_df[col].dtype):
                     cleaned_series = pd.to_numeric(
                         col_as_str.str.replace(',', '', regex=False),
                         errors='coerce'
                     )
+                    # If conversion is successful for any value, apply it
                     if cleaned_series.notna().any():
                         cleaned_df[col] = cleaned_series
+
         self.log_status("Data cleaning complete.", "SUCCESS")
         return cleaned_df
 
@@ -173,13 +187,13 @@ class App(ctk.CTk):
         self.data_file_path = filedialog.askopenfilename(
             filetypes=(("All Data Files", "*.xlsx *.xls *.csv *.tsv"),("Excel files", "*.xlsx *.xls"),("CSV files", "*.csv"),("TSV files", "*.tsv"),("All files", "*.*"))
         )
-        if not self.data_file_path: 
+        if not self.data_file_path:
             self.log_status("File selection cancelled.", "WARN")
             return
-            
+
         self.data_file_label.configure(text=os.path.basename(self.data_file_path))
         self.log_status(f"Reading data file: {os.path.basename(self.data_file_path)}", "WHITE")
-        
+
         try:
             file_ext = os.path.splitext(self.data_file_path)[1].lower()
             header_row = self._find_header_row(self.data_file_path)
@@ -193,7 +207,7 @@ class App(ctk.CTk):
                 df = pd.read_csv(self.data_file_path, sep='\t', header=header_row)
             else:
                 raise ValueError("Unsupported file type.")
-            
+
             df.dropna(how='all', inplace=True)
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
             self.original_df = df.copy()
@@ -236,7 +250,7 @@ class App(ctk.CTk):
             widget.destroy()
         self.column_widgets.clear()
         if self.dataframe is None: return
-        
+
         self.log_status("Populating column mappings with intelligent defaults...", "INFO")
         for i, col_name in enumerate(self.dataframe.columns):
             label = ctk.CTkLabel(self.scrollable_frame, text=col_name, wraplength=250)
@@ -272,7 +286,7 @@ class App(ctk.CTk):
             slide.placeholders[1].text = slide_subtitle
 
     def add_chart_and_insight_slide(self, prs, title, chart_image_stream, insight_text):
-        slide_layout = prs.slide_layouts[3] 
+        slide_layout = prs.slide_layouts[3]
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = title
         placeholder_left = slide.placeholders[1]
@@ -361,17 +375,17 @@ class App(ctk.CTk):
         if len(counts) > threshold:
             top_n = counts.head(threshold).copy() # Use copy to avoid SettingWithCopyWarning
             other_count = counts.iloc[threshold:].sum()
-            
+
             num_other_cats = len(counts) - threshold
-            other_label = f"Other ({num_other_cats} categories)"
-            
+            other_label = f"Others ({num_other_cats} categories)"
+
             top_n[other_label] = other_count
             return top_n
         return counts
 
     async def get_ai_insights_for_batch(self, column_batch: list):
         """
-        UPDATED: Handles raw data series and pre-summarized value counts using a 'hint'.
+        Handles raw data series and pre-summarized value counts using a 'hint'.
         """
         batch_col_names = [col_name for col_name, _, _ in column_batch]
         self.log_status(f"Generating AI insights for: {', '.join(batch_col_names)}...", "CYAN")
@@ -386,7 +400,7 @@ class App(ctk.CTk):
                     data_summary = data.describe().to_string()
                 else:
                     data_summary = data.value_counts().to_string()
-            
+
             data_strings_concatenated += f"Column: '{col_name}'\n---\n{data_summary}\n---\n\n"
 
         prompt = f"""
@@ -418,18 +432,18 @@ class App(ctk.CTk):
         try:
             apiKey = os.getenv("GEMINI_API_KEY")
             if not apiKey: return {name: "Error: GEMINI_API_KEY environment variable not found." for name in batch_col_names}
-            
+
             payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
             apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
-            
+
             response = await asyncio.to_thread(requests.post, apiUrl, json=payload, timeout=120)
             response.raise_for_status()
-            
+
             result = response.json()
             if result.get('candidates'):
                 json_text = result['candidates'][0]['content']['parts'][0]['text']
                 json_text = json_text.strip().lstrip('```json').rstrip('```')
-                
+
                 insights = json.loads(json_text)
                 self.log_status(f"Successfully received AI insights for: {', '.join(insights.keys())}", "INFO")
                 return insights
@@ -450,32 +464,40 @@ class App(ctk.CTk):
 
     async def generate_plots_for_df(self, prs, df_subset, group_title=""):
         """
-        UPDATED: Summarizes large categorical data. Fetches all AI insights concurrently
-        before generating charts.
+        REVISED: Sets a thread-safe Matplotlib backend to prevent warnings.
+        Summarizes large categorical data, fetches AI insights concurrently,
+        and checks for cancellation requests.
         """
+        # --- FIX: Set a non-GUI backend for Matplotlib to make it thread-safe ---
+        import matplotlib
+        matplotlib.use('Agg')
+
         mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
         chart_actions = ["Create Bar Chart", "Create Pie Chart", "Create Histogram", "Create Line Chart"]
 
-        # --- 1. Pre-compute summarized data for categorical charts to improve performance ---
+        # --- 1. Pre-compute summarized data for categorical charts ---
         precomputed_counts = {}
         for col, action in mappings.items():
+            if self.is_cancelling: return
             if action in ["Create Bar Chart", "Create Pie Chart"]:
                 if col in df_subset.columns and pd.api.types.is_object_dtype(df_subset[col].dtype):
                     if df_subset[col].nunique() > 0 and not df_subset[col].isnull().all():
                         summarized = self.summarize_categorical_data(df_subset[col], MAX_CATEGORIES_FOR_CHARTS)
                         precomputed_counts[col] = summarized
 
-        # --- 2. Gather data for AI analysis (using summarized data where available) ---
+        # --- 2. Gather data for AI analysis ---
         columns_for_ai = []
         for col, action in mappings.items():
+            if self.is_cancelling: return
             if action in chart_actions and col in df_subset.columns and df_subset[col].nunique() > 0 and not df_subset[col].isnull().all():
                 if col in precomputed_counts:
                     columns_for_ai.append((col, precomputed_counts[col], 'counts'))
                 else:
                     columns_for_ai.append((col, df_subset[col], 'series'))
-        
+
         all_insights = {}
         if columns_for_ai:
+            if self.is_cancelling: return
             batches = [columns_for_ai[i:i + AI_CALL_BATCH_SIZE] for i in range(0, len(columns_for_ai), AI_CALL_BATCH_SIZE)]
             tasks = [self.get_ai_insights_for_batch(batch) for batch in batches]
             results_list = await asyncio.gather(*tasks)
@@ -483,13 +505,14 @@ class App(ctk.CTk):
                 if isinstance(result_dict, dict):
                     all_insights.update(result_dict)
 
-        # --- 3. Generate slides using pre-fetched insights and pre-computed data ---
+        # --- 3. Generate slides ---
         for col, action in mappings.items():
+            if self.is_cancelling: return
             if action not in chart_actions: continue
             if col not in df_subset.columns or df_subset[col].nunique() == 0 or df_subset[col].isnull().all(): continue
 
             self.log_status(f"Creating chart for '{col}'...", "WHITE")
-            
+
             plt.style.use('seaborn-v0_8-talk')
             fig, ax = plt.subplots(figsize=(10, 6))
             chart_title = f"{group_title}: {col}" if group_title else f"Analysis of {col}"
@@ -523,7 +546,7 @@ class App(ctk.CTk):
                     if pd.api.types.is_numeric_dtype(df_subset[col]):
                         df_subset[col].dropna().plot(kind='hist', ax=ax, bins=15, color='skyblue', ec='black')
                         ax.set_ylabel("Frequency"); ax.set_xlabel(col)
-                    else: 
+                    else:
                         self.log_status(f"Skipping Histogram for non-numeric column: '{col}'", "WARN")
                         plt.close(fig); continue
 
@@ -531,16 +554,16 @@ class App(ctk.CTk):
                      if pd.api.types.is_numeric_dtype(df_subset[col]):
                         ax.plot(df_subset.index, df_subset[col], marker='o', linestyle='-')
                         ax.set_ylabel(col); ax.set_xlabel("Index")
-                     else: 
+                     else:
                         self.log_status(f"Skipping Line Chart for non-numeric column: '{col}'", "WARN")
                         plt.close(fig); continue
-                
+
                 plt.tight_layout()
                 img_stream = io.BytesIO()
                 plt.savefig(img_stream, format='png', dpi=200, bbox_inches='tight')
                 plt.close(fig)
                 img_stream.seek(0)
-                
+
                 insight_text = all_insights.get(col, "AI insight could not be generated for this chart.")
                 self.add_chart_and_insight_slide(prs, chart_title, img_stream, insight_text)
                 self.log_status(f"Successfully added slide for '{col}'.", "INFO")
@@ -550,30 +573,29 @@ class App(ctk.CTk):
                 self.log_status(f"Failed to create chart for '{col}': {e}", "ERROR")
                 continue
 
-
         # --- Handle Table Generation ---
         table_cols = [col for col, action in mappings.items() if action == "Include in Data Table"]
         if table_cols:
+            if self.is_cancelling: return
             self.log_status("Generating data table slide...", "WHITE")
             table_df = df_subset[table_cols]
             table_title = f"{group_title}: Data Summary" if group_title else "Detailed Data Summary"
             self.add_table_slide(prs, table_title, table_df)
             self.log_status("Data table slide created.", "INFO")
 
-
     async def generate_presentation_async(self):
         if self.dataframe is None:
             messagebox.showerror("Error", "No data has been loaded.")
             return
 
-        self.generate_button.configure(state="disabled")
         self.log_status("Starting presentation generation...", "WHITE")
-        
+
         try:
             prs = Presentation(self.template_path) if self.template_path and os.path.exists(self.template_path) else Presentation()
+            if self.is_cancelling: return
+
             if self.template_path and os.path.exists(self.template_path):
                 self.log_status(f"Using template: {os.path.basename(self.template_path)}", "INFO")
-                # Clear existing slides from template
                 for i in range(len(prs.slides) - 1, -1, -1):
                     rId = prs.slides._sldIdLst[i].rId
                     prs.part.drop_rel(rId)
@@ -582,14 +604,17 @@ class App(ctk.CTk):
                 self.log_status("No template found or specified. Using a blank 16:9 presentation.", "INFO")
                 prs.slide_width = Inches(16); prs.slide_height = Inches(9)
 
+            if self.is_cancelling: return
 
             ppt_title = self.ppt_title_entry.get() or "Data Analysis Report"
             subtitle_text = f"Source: {os.path.basename(self.data_file_path)}"
             self.add_title_slide(prs, ppt_title, subtitle_text)
             self.log_status("Added title slide.", "INFO")
-            
+
+            if self.is_cancelling: return
+
             mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
-            
+
             summary_cols = [col for col, action in mappings.items() if action == "Summarize as Bullet Points"]
             if summary_cols:
                 self.log_status("Generating summary slide...", "WHITE")
@@ -601,19 +626,26 @@ class App(ctk.CTk):
                     self.add_bullet_point_slide(prs, "Key Findings & Observations", all_bullets)
                     self.log_status("Summary slide created.", "INFO")
 
+            if self.is_cancelling: return
 
             grouping_col = next((col for col, action in mappings.items() if action == "Group Slides by this Column"), None)
             if grouping_col:
                 self.log_status(f"Grouping slides by column: '{grouping_col}'...", "WHITE")
                 unique_groups = self.dataframe[grouping_col].dropna().unique()
                 for group in unique_groups:
+                    if self.is_cancelling: return
                     self.log_status(f"Generating slides for group: '{group}'...", "WHITE")
                     self.add_section_header_slide(prs, f"Detailed Analysis for: {group}")
                     df_subset = self.dataframe[self.dataframe[grouping_col] == group]
                     await self.generate_plots_for_df(prs, df_subset, group_title=str(group))
             else:
+                if self.is_cancelling: return
                 self.log_status("Generating slides for the entire dataset...", "WHITE")
                 await self.generate_plots_for_df(prs, self.dataframe)
+
+            if self.is_cancelling:
+                self.log_status("Generation cancelled before saving.", "WARN")
+                return
 
             self.add_section_header_slide(prs, "Thank You")
 
@@ -637,15 +669,64 @@ class App(ctk.CTk):
             messagebox.showerror("Generation Error", error_message, detail=str(e))
             import traceback
             traceback.print_exc()
-        finally:
-            self.generate_button.configure(state="normal")
 
-    def generate_presentation(self):
+    # --- Threading and Cancellation Logic ---
+
+    def start_generation_thread(self):
+        """Starts the presentation generation in a separate thread to keep the UI responsive."""
+        if self.generation_thread and self.generation_thread.is_alive():
+            self.log_status("Generation is already in progress.", "WARN")
+            return
+
+        self.is_cancelling = False
+        # Replace the 'Generate' button with a red 'Cancel' button
+        self.generate_button.configure(
+            text="Cancel Generation",
+            command=self.cancel_generation,
+            fg_color="#D32F2F",
+            hover_color="#B71C1C"
+        )
+
+        self.generation_thread = threading.Thread(target=self._run_async_generation, daemon=True)
+        self.generation_thread.start()
+
+    def cancel_generation(self):
+        """Signals the generation thread to cancel its operation."""
+        if self.generation_thread and self.generation_thread.is_alive():
+            self.log_status("Cancellation requested. Will stop after the current step.", "WARN")
+            self.is_cancelling = True
+            # Disable the button to prevent multiple clicks while waiting for the thread to stop
+            self.generate_button.configure(text="Cancelling...", state="disabled")
+
+    def _reset_generate_button_state(self):
+        """Resets the generate button to its initial state. Must be called from the main GUI thread."""
+        self.generate_button.configure(
+            text="Generate Presentation",
+            command=self.start_generation_thread,
+            state="normal" if self.dataframe is not None else "disabled",
+            fg_color=ctk.ThemeManager.theme["CTkButton"]["fg_color"],
+            hover_color=ctk.ThemeManager.theme["CTkButton"]["hover_color"]
+        )
+        self.is_cancelling = False
+        self.generation_thread = None
+
+    def _run_async_generation(self):
+        """
+        The target function for the worker thread. It runs the asyncio event loop for the async generation task.
+        """
         try:
             asyncio.run(self.generate_presentation_async())
         except Exception as e:
-             self.log_status(f"A runtime error occurred: {e}", "ERROR")
-             messagebox.showerror("Runtime Error", f"An error occurred while running the async operation:\n\n{e}")
+            # Log any exceptions that occur during the async operation
+            self.log_status(f"A runtime error occurred in the generation thread: {e}", "ERROR")
+            # Schedule a messagebox to be shown from the main thread for thread safety
+            self.after(0, lambda: messagebox.showerror("Runtime Error", f"An unexpected error occurred during generation:\n\n{e}"))
+            import traceback
+            traceback.print_exc()
+        finally:
+            # No matter what happens (success, error, or cancellation),
+            # schedule the button reset to run on the main GUI thread.
+            self.after(0, self._reset_generate_button_state)
 
 if __name__ == "__main__":
     app = App()
