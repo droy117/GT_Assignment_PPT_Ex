@@ -534,31 +534,39 @@ class App(ctk.CTk):
             data_strings_concatenated += f"Column: '{col_name}'\n---\n{data_summary}\n---\n\n"
 
         prompt = f"""
-        As a data analyst, analyze the following data summaries for multiple columns from a dataset.
+        As a data analyst, your task is to analyze data summaries for several columns from a dataset and generate insights for a PowerPoint presentation.
         The data represents charts that your user will see. For data with an 'Other' category, acknowledge that it represents a collection of smaller groups.
 
         --- DATA SUMMARIES ---
         {data_strings_concatenated}
         --- END DATA ---
 
-        Based on this data, provide a concise analysis for each column for a PowerPoint slide.
-        Your response MUST be a valid JSON object. The keys of the object should be the exact column names provided.
-        For each column name key, the value should be a string containing the analysis. Structure the analysis string for each column into two sections using markdown-style headers:
+        Based on this data, provide a concise analysis for EACH column. Your response MUST be a single, valid JSON object.
+        The keys of the object must be the exact column names provided.
+        The value for each key must be a string containing the analysis for that column, structured into two sections:
 
         **Summary Insight:**
-        - Write a 2-3 sentence interpretation of what this data reveals. What is the main takeaway?
+        - Write a 3-5 sentence interpretation of what the data reveals, with each sentence as a separate bullet point starting with '-'. What is the main takeaway? Focus on the most significant findings, be descriptive but keep it short.
 
         **Key Metrics:**
-        - List 2-4 key, quantifiable metrics derived from the data.
-        - For numerical data, include: Average, Max, Min, and count.
-        - For categorical/summarized data, include: The most frequent category and its count, and the least frequent category. If an 'Other' group exists, mention its size.
+        - List key, quantifiable metrics derived from the data summary.
+        - **For categorical data (like for pie/bar charts, presented as category counts):**
+            - You MUST calculate the total sum of all counts first.
+            - Then, for the most significant categories (e.g., the top 3), list the category name, its raw count, AND its percentage of the total. Format it like: "Category Name: Count (Percentage%)".
+        - **For numerical data (like for histograms, presented as descriptive statistics):**
+            - Include key stats like Average, Max, Min, and total count.
+        - **For score data (identified when the column header includes 'out of a maximum of...'):**
+            - The maximum possible score is provided in the column header. Use this maximum score for context.
+            - Provide the Average, Max, and Min scores from the data summary.
+            - When reporting these metrics, present them in an 'X out of Y' format. For the average score, also include the percentage of the maximum.
 
         Example JSON output format:
         {{
-          "Column Name A": "**Summary Insight:**\\n- Brief analysis of A.\\n\\n**Key Metrics:**\\n- Metric 1: Value\\n- Metric 2: Value",
-          "Column Name B": "**Summary Insight:**\\n- Brief analysis of B.\\n\\n**Key Metrics:**\\n- Metric 1: Value\\n- Metric 2: Value"
+          "Risk Level": "**Summary Insight:**\\n- The analysis shows a significant portion of items are categorized as high risk.\\n\\n**Key Metrics:**\\n- High Risk: 75 (64.1%)\\n- Medium Risk: 25 (21.4%)",
+          "Compliance Score (Score)": "**Summary Insight:**\\n- On average, the compliance score is high, but there's room for improvement to reach the maximum score.\\n\\n**Key Metrics:**\\n- Average Score: 95.5 out of 115 (83.0%)\\n- Maximum Score: 110 out of 115\\n- Minimum Score: 75 out of 115"
         }}
-        Ensure the JSON is valid and properly formatted. Do not include any additional text outside the JSON object."""
+        Ensure the entire output is a single, valid JSON object and nothing else. Do not include markdown formatting like ```json in the final response.
+        """
         try:    
             apiKey = self.api_key.get()
             if not apiKey: return {name: "Error: GEMINI_API_KEY not found. Please set it in the settings." for name in batch_col_names}
