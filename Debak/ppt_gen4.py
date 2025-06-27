@@ -133,7 +133,6 @@ class App(ctk.CTk):
         # --- Settings Menu (Initially Hidden) ---
         self.settings_menu_open = False
         self.settings_menu_frame = ctk.CTkFrame(self, corner_radius=15)
-        # self.settings_menu_frame.place(relx=0.5, rely=-1.0, anchor="n") # Start off-screen
         self.create_settings_widgets()
         
         # --- Final Initialization ---
@@ -143,7 +142,6 @@ class App(ctk.CTk):
 
     def create_settings_widgets(self):
         """Creates the widgets inside the settings menu frame."""
-        # Add blue rounded border to the settings menu frame
         self.settings_menu_frame.configure(border_width=3, border_color="#2196F3", corner_radius=0)
 
         settings_content_frame = ctk.CTkFrame(self.settings_menu_frame, fg_color="transparent")
@@ -363,33 +361,75 @@ class App(ctk.CTk):
             self.log_status("Template selection cancelled. Using default.", "WARN")
 
     def populate_column_mappings(self):
+        """
+        Populates the UI with column names and dropdowns for actions,
+        with an improved intelligent default selection for the action.
+        """
+        # Clear existing widgets
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.column_widgets.clear()
         if self.dataframe is None: return
-        self.log_status("Populating column mappings with intelligent defaults...", "INFO")
+
+        self.log_status("Populating column mappings with improved intelligent defaults...", "INFO")
+
         for i, col_name in enumerate(self.dataframe.columns):
             label = ctk.CTkLabel(self.scrollable_frame, text=col_name, wraplength=250)
             label.grid(row=i, column=0, padx=10, pady=(5, 10), sticky="w")
-            unique_count = self.dataframe[col_name].nunique()
-            dtype = self.dataframe[col_name].dtype
-            col_lower = col_name.lower()
-            if col_name in self.max_score_info:
-                default_action = "Create Bar Chart"
-            elif "risk" in col_lower or "level" in col_lower:
-                 default_action = "Create Pie Chart"
-            elif dtype in ['int64', 'float64']:
-                default_action = "Create Histogram"
-            elif 0 < unique_count < 6 and dtype == 'object':
-                default_action = "Create Pie Chart"
-            elif dtype == 'object' and unique_count > len(self.dataframe) * 0.8:
-                 default_action = "Summarize as Bullet Points"
-            else:
+
+            # --- New Recommendation Logic ---
+            col = self.dataframe[col_name]
+            unique_count = col.nunique()
+            dtype = col.dtype
+            default_action = "Ignore"  # Start with Ignore as the default
+
+            # Rule 1: Ignore date/time columns
+            if pd.api.types.is_datetime64_any_dtype(dtype):
                 default_action = "Ignore"
+
+            # Rule 2: Ignore columns with no or only one unique value
+            elif unique_count <= 1:
+                default_action = "Ignore"
+
+            # Rule 3: Handle special 'Score' columns from the original logic
+            elif col_name in self.max_score_info:
+                default_action = "Create Bar Chart"
+
+            # Rule 4: Handle boolean-like columns (True/False, Yes/No) -> Pie Chart
+            elif unique_count == 2:
+                default_action = "Create Pie Chart"
+
+            # Rule 5: Handle numeric columns
+            elif pd.api.types.is_numeric_dtype(dtype):
+                # If there are a few unique numbers, treat as discrete categories -> Bar Chart
+                if 2 < unique_count <= 10:
+                    default_action = "Create Bar Chart"
+                # For more unique values, it's likely continuous data -> Histogram
+                else:  # unique_count > 10
+                    default_action = "Create Histogram"
+
+            # Rule 6: Handle categorical (object/string) columns
+            elif pd.api.types.is_object_dtype(dtype):
+                # If most values are unique (like IDs or comments), summarize them
+                if unique_count > len(col) * 0.8 and unique_count > 10:
+                    default_action = "Summarize as Bullet Points"
+                # For a moderate number of categories -> Bar Chart
+                elif unique_count > 7:  # User's suggestion
+                    default_action = "Create Bar Chart"
+                # For a small number of categories -> Pie Chart is good for proportions
+                elif 2 < unique_count <= 7:
+                    default_action = "Create Pie Chart"
+            
+            # Rule 7: Specific keyword check (from old logic) as a final override
+            if "risk" in col_name.lower() or "level" in col_name.lower():
+                 default_action = "Create Pie Chart"
+            # --- End of New Logic ---
+
             dropdown_var = ctk.StringVar(value=default_action)
             dropdown = ctk.CTkOptionMenu(self.scrollable_frame, values=COLUMN_ACTIONS, variable=dropdown_var, width=250)
             dropdown.grid(row=i, column=1, padx=10, pady=(5, 10), sticky="e")
             self.column_widgets[col_name] = [label, dropdown]
+            
         self.log_status("Column mapping populated.", "INFO")
 
     def add_title_slide(self, prs, slide_title, slide_subtitle):
@@ -489,8 +529,18 @@ class App(ctk.CTk):
                     data_summary = data.describe().to_string()
                 else:
                     data_summary = data.value_counts().to_string()
-            data_strings_concatenated += f"Column: '{col_name}'\n---\n{data_summary}\n---\n\n"
+            
+            # --- MODIFICATION START ---
+            # Check if the column is a score column and add context for the AI
+            column_header = f"Column: '{col_name}'"
+            max_score = self.max_score_info.get(col_name)
+            if max_score:
+                column_header += f" (Scores are out of a maximum of {max_score})"
+            data_strings_concatenated += f"{column_header}\n---\n{data_summary}\n---\n\n"
+            # --- MODIFICATION END ---
 
+        # --- MODIFICATION START ---
+        # Updated prompt with instructions for handling score data
         prompt = f"""
         As a data analyst, your task is to analyze data summaries for several columns from a dataset and generate insights for a PowerPoint presentation.
         The data represents charts that your user will see. For data with an 'Other' category, acknowledge that it represents a collection of smaller groups.
@@ -508,21 +558,24 @@ class App(ctk.CTk):
 
         **Key Metrics:**
         - List key, quantifiable metrics derived from the data summary.
-        - **For categorical data (like for pie charts or bar charts, presented as category counts):**
+        - **For categorical data (like for pie/bar charts, presented as category counts):**
             - You MUST calculate the total sum of all counts first.
             - Then, for the most significant categories (e.g., the top 3), list the category name, its raw count, AND its percentage of the total. Format it like: "Category Name: Count (Percentage%)".
-            - Example: "High Risk: 75 (64.1%)".
-            - If an 'Other' group exists, mention its count and percentage as well.
-        - **For numerical data (like for histograms or line charts, presented as descriptive statistics):**
+        - **For numerical data (like for histograms, presented as descriptive statistics):**
             - Include key stats like Average, Max, Min, and total count.
+        - **For score data (identified when the column header includes 'out of a maximum of...'):**
+            - The maximum possible score is provided in the column header. Use this maximum score for context.
+            - Provide the Average, Max, and Min scores from the data summary.
+            - When reporting these metrics, present them in an 'X out of Y' format. For the average score, also include the percentage of the maximum.
 
         Example JSON output format:
         {{
-          "Risk Level": "**Summary Insight:**\\n- The analysis shows a significant portion of items are categorized as high risk, dominating the dataset.\\n- Medium risk items are the next most common, with low risk items being relatively rare.\\n\\n**Key Metrics:**\\n- High Risk: 75 (64.1%)\\n- Medium Risk: 25 (21.4%)\\n- Low Risk: 17 (14.5%)",
-          "Item Cost": "**Summary Insight:**\\n- The cost of items varies, with the average cost being around $150.\\n- There is a wide range between the minimum and maximum cost, indicating diverse item values.\\n\\n**Key Metrics:**\\n- Average Cost: $150.25\\n- Maximum Cost: $499.99\\n- Minimum Cost: $10.50\\n- Total Items: 117"
+          "Risk Level": "**Summary Insight:**\\n- The analysis shows a significant portion of items are categorized as high risk.\\n\\n**Key Metrics:**\\n- High Risk: 75 (64.1%)\\n- Medium Risk: 25 (21.4%)",
+          "Compliance Score (Score)": "**Summary Insight:**\\n- On average, the compliance score is high, but there's room for improvement to reach the maximum score.\\n\\n**Key Metrics:**\\n- Average Score: 95.5 out of 115 (83.0%)\\n- Maximum Score: 110 out of 115\\n- Minimum Score: 75 out of 115"
         }}
         Ensure the entire output is a single, valid JSON object and nothing else. Do not include markdown formatting like ```json in the final response.
         """
+        # --- MODIFICATION END ---
         try:
             apiKey = self.api_key.get()
             if not apiKey: return {name: "Error: GEMINI_API_KEY not found. Please set it in the settings." for name in batch_col_names}
