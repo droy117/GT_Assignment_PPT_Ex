@@ -184,7 +184,7 @@ class App(ctk.CTk):
         self.max_cat_value_label = ctk.CTkLabel(settings_content_frame, textvariable=self.max_categories_for_charts)
         self.max_cat_value_label.grid(row=8, column=2, sticky="w")
         
-        cat_desc = ctk.CTkLabel(settings_content_frame, text="For pie/bar charts, categories with smaller counts will be grouped into an 'Others' slice.",
+        cat_desc = ctk.CTkLabel(settings_content_frame, text="For pie/bar charts, categories with smaller counts will be grouped into an 'Others' slice. Larger counts will show more categories but might make the chart less readable.",
                     font=ctk.CTkFont(slant="italic"), wraplength=450, justify="left")
         cat_desc.grid(row=9, column=0, columnspan=3, sticky="w", pady=(0, 20))
         
@@ -554,7 +554,7 @@ class App(ctk.CTk):
         The value for each key must be a string containing the analysis for that column, structured into two sections:
 
         **Summary Insight:**
-        - Write a 2-3 sentence interpretation of what the data reveals, with each sentence as a separate bullet point starting with '-'. What is the main takeaway? Focus on the most significant findings.
+        - Write a 3-5 sentence interpretation of what the data reveals, with each sentence as a separate bullet point starting with '-'. What is the main takeaway? Focus on the most significant findings, be descriptive but keep it short.
 
         **Key Metrics:**
         - List key, quantifiable metrics derived from the data summary.
