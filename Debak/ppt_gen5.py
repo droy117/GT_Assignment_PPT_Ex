@@ -20,16 +20,16 @@ load_dotenv()
 # --- Constants and Theme Settings ---
 APP_TITLE = "PPTEx"
 WINDOW_SIZE = "1200x800"
+# --- MODIFICATION START ---
+# Removed "Group Slides by this Column", "Summarize as Bullet Points", "Include in Data Table"
 COLUMN_ACTIONS = [
     "Ignore",
-    "Group Slides by this Column",
-    "Summarize as Bullet Points",
     "Create Bar Chart",
     "Create Pie Chart",
     "Create Histogram",
     "Create Line Chart",
-    "Include in Data Table"
 ]
+# --- MODIFICATION END ---
 API_KEY_FILE = "gemini_api_key.txt"
 
 # --- Helper function to truncate long labels ---
@@ -410,9 +410,11 @@ class App(ctk.CTk):
 
             # Rule 6: Handle categorical (object/string) columns
             elif pd.api.types.is_object_dtype(dtype):
-                # If most values are unique (like IDs or comments), summarize them
+                # --- MODIFICATION START ---
+                # If most values are unique (like IDs or comments), ignore them as summarization is removed
                 if unique_count > len(col) * 0.8 and unique_count > 10:
-                    default_action = "Summarize as Bullet Points"
+                    default_action = "Ignore"
+                # --- MODIFICATION END ---
                 # For a moderate number of categories -> Bar Chart
                 elif unique_count > 7:  # User's suggestion
                     default_action = "Create Bar Chart"
@@ -529,54 +531,35 @@ class App(ctk.CTk):
                     data_summary = data.describe().to_string()
                 else:
                     data_summary = data.value_counts().to_string()
-            
-            # --- MODIFICATION START ---
-            # Check if the column is a score column and add context for the AI
-            column_header = f"Column: '{col_name}'"
-            max_score = self.max_score_info.get(col_name)
-            if max_score:
-                column_header += f" (Scores are out of a maximum of {max_score})"
-            data_strings_concatenated += f"{column_header}\n---\n{data_summary}\n---\n\n"
-            # --- MODIFICATION END ---
+            data_strings_concatenated += f"Column: '{col_name}'\n---\n{data_summary}\n---\n\n"
 
-        # --- MODIFICATION START ---
-        # Updated prompt with instructions for handling score data
         prompt = f"""
-        As a data analyst, your task is to analyze data summaries for several columns from a dataset and generate insights for a PowerPoint presentation.
+        As a data analyst, analyze the following data summaries for multiple columns from a dataset.
         The data represents charts that your user will see. For data with an 'Other' category, acknowledge that it represents a collection of smaller groups.
 
         --- DATA SUMMARIES ---
         {data_strings_concatenated}
         --- END DATA ---
 
-        Based on this data, provide a concise analysis for EACH column. Your response MUST be a single, valid JSON object.
-        The keys of the object must be the exact column names provided.
-        The value for each key must be a string containing the analysis for that column, structured into two sections:
+        Based on this data, provide a concise analysis for each column for a PowerPoint slide.
+        Your response MUST be a valid JSON object. The keys of the object should be the exact column names provided.
+        For each column name key, the value should be a string containing the analysis. Structure the analysis string for each column into two sections using markdown-style headers:
 
         **Summary Insight:**
-        - Write a 3-5 sentence interpretation of what the data reveals, with each sentence as a separate bullet point starting with '-'. What is the main takeaway? Focus on the most significant findings, be descriptive but keep it short.
+        - Write a 2-3 sentence interpretation of what this data reveals. What is the main takeaway?
 
         **Key Metrics:**
-        - List key, quantifiable metrics derived from the data summary.
-        - **For categorical data (like for pie/bar charts, presented as category counts):**
-            - You MUST calculate the total sum of all counts first.
-            - Then, for the most significant categories (e.g., the top 3), list the category name, its raw count, AND its percentage of the total. Format it like: "Category Name: Count (Percentage%)".
-        - **For numerical data (like for histograms, presented as descriptive statistics):**
-            - Include key stats like Average, Max, Min, and total count.
-        - **For score data (identified when the column header includes 'out of a maximum of...'):**
-            - The maximum possible score is provided in the column header. Use this maximum score for context.
-            - Provide the Average, Max, and Min scores from the data summary.
-            - When reporting these metrics, present them in an 'X out of Y' format. For the average score, also include the percentage of the maximum.
+        - List 2-4 key, quantifiable metrics derived from the data.
+        - For numerical data, include: Average, Max, Min, and count.
+        - For categorical/summarized data, include: The most frequent category and its count, and the least frequent category. If an 'Other' group exists, mention its size.
 
         Example JSON output format:
         {{
-          "Risk Level": "**Summary Insight:**\\n- The analysis shows a significant portion of items are categorized as high risk.\\n\\n**Key Metrics:**\\n- High Risk: 75 (64.1%)\\n- Medium Risk: 25 (21.4%)",
-          "Compliance Score (Score)": "**Summary Insight:**\\n- On average, the compliance score is high, but there's room for improvement to reach the maximum score.\\n\\n**Key Metrics:**\\n- Average Score: 95.5 out of 115 (83.0%)\\n- Maximum Score: 110 out of 115\\n- Minimum Score: 75 out of 115"
+          "Column Name A": "**Summary Insight:**\\n- Brief analysis of A.\\n\\n**Key Metrics:**\\n- Metric 1: Value\\n- Metric 2: Value",
+          "Column Name B": "**Summary Insight:**\\n- Brief analysis of B.\\n\\n**Key Metrics:**\\n- Metric 1: Value\\n- Metric 2: Value"
         }}
-        Ensure the entire output is a single, valid JSON object and nothing else. Do not include markdown formatting like ```json in the final response.
-        """
-        # --- MODIFICATION END ---
-        try:
+        Ensure the JSON is valid and properly formatted. Do not include any additional text outside the JSON object."""
+        try:    
             apiKey = self.api_key.get()
             if not apiKey: return {name: "Error: GEMINI_API_KEY not found. Please set it in the settings." for name in batch_col_names}
             payload = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
@@ -638,7 +621,6 @@ class App(ctk.CTk):
             if action not in chart_actions: continue
             if col not in df_subset.columns or df_subset[col].nunique() == 0 or df_subset[col].isnull().all(): continue
             self.log_status(f"Creating chart for '{col}'...", "WHITE")
-            # Use the modern seaborn style if available, otherwise fallback to 'seaborn-v0_8-talk'
             try:
                 plt.style.use('seaborn-v0_8-talk')
             except OSError:
@@ -687,14 +669,10 @@ class App(ctk.CTk):
                 plt.close(fig)
                 self.log_status(f"Failed to create chart for '{col}': {e}", "ERROR")
                 continue
-        table_cols = [col for col, action in mappings.items() if action == "Include in Data Table"]
-        if table_cols:
-            if self.is_cancelling: return
-            self.log_status("Generating data table slide...", "WHITE")
-            table_df = df_subset[table_cols]
-            table_title = f"{group_title}: Data Summary" if group_title else "Detailed Data Summary"
-            self.add_table_slide(prs, table_title, table_df)
-            self.log_status("Data table slide created.", "INFO")
+        # --- MODIFICATION START ---
+        # Removed the logic block for "Include in Data Table"
+        # --- MODIFICATION END ---
+        
 
     async def generate_presentation_async(self):
         if self.dataframe is None:
@@ -718,31 +696,20 @@ class App(ctk.CTk):
             self.log_status("Added title slide.", "INFO")
             if self.is_cancelling: return
             mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
-            summary_cols = [col for col, action in mappings.items() if action == "Summarize as Bullet Points"]
-            if summary_cols:
-                self.log_status("Generating summary slide...", "WHITE")
-                all_bullets = []
-                for col in summary_cols:
-                    bullets = self.dataframe[col].dropna().unique().tolist()
-                    if bullets: all_bullets.extend(bullets)
-                if all_bullets:
-                    self.add_bullet_point_slide(prs, "Key Findings & Observations", all_bullets)
-                    self.log_status("Summary slide created.", "INFO")
+
+            # --- MODIFICATION START ---
+            # Removed the logic block for "Summarize as Bullet Points"
+            # --- MODIFICATION END ---
+
             if self.is_cancelling: return
-            grouping_col = next((col for col, action in mappings.items() if action == "Group Slides by this Column"), None)
-            if grouping_col:
-                self.log_status(f"Grouping slides by column: '{grouping_col}'...", "WHITE")
-                unique_groups = self.dataframe[grouping_col].dropna().unique()
-                for group in unique_groups:
-                    if self.is_cancelling: return
-                    self.log_status(f"Generating slides for group: '{group}'...", "WHITE")
-                    self.add_section_header_slide(prs, f"Detailed Analysis for: {group}")
-                    df_subset = self.dataframe[self.dataframe[grouping_col] == group]
-                    await self.generate_plots_for_df(prs, df_subset, group_title=str(group))
-            else:
-                if self.is_cancelling: return
-                self.log_status("Generating slides for the entire dataset...", "WHITE")
-                await self.generate_plots_for_df(prs, self.dataframe)
+            
+            # --- MODIFICATION START ---
+            # Removed the if/else logic for "Group Slides by this Column".
+            # The code now always generates slides for the entire dataset.
+            self.log_status("Generating slides for the entire dataset...", "WHITE")
+            await self.generate_plots_for_df(prs, self.dataframe)
+            # --- MODIFICATION END ---
+
             if self.is_cancelling:
                 self.log_status("Generation cancelled before saving.", "WARN"); return
             self.add_section_header_slide(prs, "Thank You")
