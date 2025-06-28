@@ -696,8 +696,18 @@ class App(ctk.CTk):
         batch_col_names = [col_name for col_name, _, _ in column_batch]
         self.log_status(f"Generating AI insights for: {', '.join(batch_col_names)}...", "CYAN")
         data_strings_concatenated = ""
+
+        # --- MODIFICATION START ---
+        # Added logic to explicitly pass the maximum score to the AI.
         for col_name, data, hint in column_batch:
             data_summary = ""
+            header_info = "" # New variable to hold max score info
+
+            # Check if the column is a score column and add its max value to the prompt context
+            if col_name in self.max_score_info:
+                max_score = self.max_score_info[col_name]
+                header_info = f"Maximum Possible Score: {max_score}\n"
+
             if hint == 'counts':
                 data_summary = data.to_string()
             elif hint == 'series':
@@ -705,7 +715,9 @@ class App(ctk.CTk):
                     data_summary = data.describe().to_string()
                 else:
                     data_summary = data.value_counts().to_string()
-            data_strings_concatenated += f"Column: '{col_name}'\n---\n{data_summary}\n---\n\n"
+
+            # Construct the final string for the column, including the max score info if available
+            data_strings_concatenated += f"Column: '{col_name}'\n{header_info}---\n{data_summary}\n---\n\n"
 
         prompt = f"""
         As a data analyst, your task is to analyze data summaries for several columns from a dataset and generate insights for a PowerPoint presentation.
@@ -729,8 +741,8 @@ class App(ctk.CTk):
             - Then, for the most significant categories (e.g., the top 3), list the category name, its raw count, AND its percentage of the total. Format it like: "Category Name: Count (Percentage%)".
         - **For numerical data (like for histograms, presented as descriptive statistics):**
             - Include key stats like Average, Max, Min, and total count.
-        - **For score data (identified when the column header includes 'out of a maximum of...'):**
-            - The maximum possible score is provided in the column header. Use this maximum score for context.
+        - **For score data (identified by a 'Maximum Possible Score' field in its summary):**
+            - Use the provided 'Maximum Possible Score' as the correct denominator (the 'Y' in 'X out of Y').
             - Provide the Average, Max, and Min scores from the data summary.
             - When reporting these metrics, present them in an 'X out of Y' format. For the average score, also include the percentage of the maximum.
 
