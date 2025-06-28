@@ -841,6 +841,20 @@ class App(ctk.CTk):
             plt.style.use('seaborn-talk')
         
         fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # --- Start of Addition ---
+        # This block sets the font sizes for various chart elements.
+        plt.rcParams.update({
+            'font.size': 14,           # Set the global default font size
+            'axes.titlesize': 16,      # Axis title
+            'axes.labelsize': 14,      # Axis labels
+            'xtick.labelsize': 12,     # X tick labels
+            'ytick.labelsize': 12,     # Y tick labels
+            'legend.fontsize': 12,     # Legend font
+            'figure.titlesize': 18     # Figure title
+        })
+        # --- End of Addition ---
+
         chart_title = f"{group_title}: {col}" if group_title else f"Analysis of {col}"
         
         try:
@@ -865,7 +879,9 @@ class App(ctk.CTk):
             elif action == "Create Pie Chart":
                 data_counts = precomputed_counts.get(col, df_subset[col].value_counts())
                 truncated_labels = data_counts.index.map(truncate_label)
-                ax.pie(data_counts, labels=truncated_labels, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
+                # The 'textprops' argument is added here to control the font size inside the pie chart
+                ax.pie(data_counts, labels=truncated_labels, autopct='%1.1f%%', startangle=140, 
+                    colors=plt.cm.Pastel1.colors, textprops={'fontsize': 14})
                 ax.axis('equal')
                 
             elif action == "Create Histogram":
@@ -904,8 +920,8 @@ class App(ctk.CTk):
             
         except Exception as e:
             plt.close(fig)
-            raise Exception(f"Failed to create chart for '{col}': {e}")    
-
+            raise Exception(f"Failed to create chart for '{col}': {e}")
+        
     async def generate_presentation_async(self):
         if self.dataframe is None:
             messagebox.showerror("Error", "No data has been loaded.")
