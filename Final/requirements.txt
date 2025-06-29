@@ -1,0 +1,7 @@
+dotenv
+python-pptx
+customtkinter
+requests
+pandas
+matplotlib
+openpyxl

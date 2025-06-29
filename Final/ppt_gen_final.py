@@ -20,8 +20,7 @@ load_dotenv()
 # --- Constants and Theme Settings ---
 APP_TITLE = "PPTEx"
 WINDOW_SIZE = "1200x800"
-# --- MODIFICATION START ---
-# Removed "Group Slides by this Column", "Summarize as Bullet Points", "Include in Data Table"
+
 COLUMN_ACTIONS = [
     "Ignore",
     "Create Bar Chart",
@@ -29,7 +28,7 @@ COLUMN_ACTIONS = [
     "Create Histogram",
     "Create Line Chart",
 ]
-# --- MODIFICATION END ---
+
 API_KEY_FILE = "gemini_api_key.txt"
 
 # --- Helper function to truncate long labels ---
@@ -157,10 +156,11 @@ class App(ctk.CTk):
         
         self.api_key_entry = ctk.CTkEntry(settings_content_frame, textvariable=self.api_key, show="*", width=400)
         self.api_key_entry.grid(row=2, column=0, columnspan=3, sticky="ew")
-        
-        api_desc = ctk.CTkLabel(settings_content_frame, text="Your API key is stored locally in api_key.txt and is never shared. Get API key here: https://aistudio.google.com/app/apikey",
+
+        api_desc = ctk.CTkLabel(settings_content_frame, text="Your API key is stored locally in api_key.txt and is never shared. Get API key here: https://aistudio.google.com/app/apikey. For submission we have already added an API key in the gemini_api_key.txt file.",
                     font=ctk.CTkFont(slant="italic"), wraplength=450, justify="left")
         api_desc.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 20))
+        
 
         # --- Batch Size ---
         batch_label = ctk.CTkLabel(settings_content_frame, text="AI Call Batch Size", font=ctk.CTkFont(size=16, weight="bold"))
@@ -957,18 +957,10 @@ class App(ctk.CTk):
             if self.is_cancelling: return
             mappings = {col: widgets[1].get() for col, widgets in self.column_widgets.items()}
 
-            # --- MODIFICATION START ---
-            # Removed the logic block for "Summarize as Bullet Points"
-            # --- MODIFICATION END ---
-
             if self.is_cancelling: return
             
-            # --- MODIFICATION START ---
-            # Removed the if/else logic for "Group Slides by this Column".
-            # The code now always generates slides for the entire dataset.
             self.log_status("Generating slides for the entire dataset...", "WHITE")
             await self.generate_plots_for_df(prs, self.dataframe)
-            # --- MODIFICATION END ---
 
             self.log_status("Attempting to generate conclusion slide...", "WHITE")
             # Automatically find the most relevant columns for a summary
